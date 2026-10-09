@@ -1,2 +1,15 @@
-streamlit
-python-dotenv
+# Frontend
+streamlit>=1.40
+requests>=2.31
+
+# Backend
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+
+# Shared
+python-dotenv>=1.0
+
+# Dev / tests
+pytest>=8.0
+httpx>=0.27

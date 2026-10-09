@@ -276,11 +276,10 @@ with st.form("preferences"):
 # Submit
 # ---------------------------------------------------------------------------
 
-if submitted:
+def save_form() -> None:
     if not valid_id:
         st.error("Enter a valid User ID in the sidebar before saving.")
-        st.stop()
-
+        return
     try:
         prefs = PreferencesIn(
             interests=interests or [],
@@ -301,16 +300,132 @@ if submitted:
     except ValidationError as e:
         for err in e.errors():
             st.error(err["msg"].removeprefix("Value error, "))
-        st.stop()
-
+        return
     try:
         saved = api_client.save_preferences(user_id, prefs)
     except BackendError as e:
         st.error(f"Couldn't save: {e}")
-        st.stop()
+        return
 
     ss.prefs = saved
     ss.last_saved = saved["updated_at"]
     st.success(f"Preferences saved for **{user_id}**.", icon="💾")
     with st.expander("What was sent to the backend"):
         st.json(saved)
+
+
+if submitted:
+    save_form()
+
+
+# ---------------------------------------------------------------------------
+# Sidequest generation
+# ---------------------------------------------------------------------------
+
+STARS = {1: "★☆☆☆☆", 2: "★★☆☆☆", 3: "★★★☆☆", 4: "★★★★☆", 5: "★★★★★"}
+
+
+def render_quest(record: dict) -> None:
+    q = record["quest"]
+    with st.container(border=True):
+        st.subheader(q["title"])
+        st.write(q["summary"])
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Time", f"{q['estimated_minutes']} min")
+        c2.metric("Difficulty", label(q["difficulty"]))
+        c3.metric("Energy", ENERGY_LABELS[q["energy_required"]])
+        c4.metric("Setting", label(q["setting"]))
+
+        st.markdown("**Steps**")
+        st.markdown("\n".join(f"{i}. {step}" for i, step in enumerate(q["steps"], 1)))
+
+        if q.get("accessibility_notes"):
+            st.markdown(f"♿ **Accessibility:** {q['accessibility_notes']}")
+        if q.get("weather_backup"):
+            st.markdown(f"🌦️ **Weather backup:** {q['weather_backup']}")
+        if q.get("why_it_fits"):
+            st.caption(f"Why this fits you: {q['why_it_fits']}")
+        if q.get("tags"):
+            st.caption(" · ".join(f"#{t}" for t in q["tags"]))
+
+
+def feedback_form(record: dict) -> None:
+    with st.form(f"feedback_{record['id']}"):
+        st.markdown("**How did it go?**")
+        outcome = st.radio(
+            "Did you do this quest?",
+            ["Completed it", "Skipped it"],
+            horizontal=True,
+            key=f"outcome_{record['id']}",
+        )
+        rating = st.select_slider(
+            "Rating (only used if completed)",
+            options=list(STARS),
+            value=4,
+            format_func=STARS.get,
+            key=f"rating_{record['id']}",
+        )
+        comment = st.text_input(
+            "Comment (optional)",
+            placeholder="What did you like or dislike?",
+            key=f"comment_{record['id']}",
+        )
+        if st.form_submit_button("Send feedback", use_container_width=True):
+            completed = outcome == "Completed it"
+            try:
+                api_client.send_feedback(
+                    user_id, record["id"], completed, rating if completed else None, comment.strip()
+                )
+            except BackendError as e:
+                st.error(f"Couldn't send feedback: {e}")
+            else:
+                st.toast("Thanks! Your next quest will take this into account.", icon="🙏")
+                st.rerun()
+
+
+st.divider()
+st.header("🗺️ Your sidequest")
+
+if not (healthy and valid_id):
+    st.info("Enter your User ID in the sidebar (and save your preferences) to generate a sidequest.")
+else:
+    try:
+        quests = api_client.list_quests(user_id)
+    except BackendError as e:
+        st.error(str(e))
+        quests = []
+
+    st.caption("Uses your **saved** preferences - save the form first if you changed anything.")
+    if st.button("✨ Generate sidequest", type="primary", use_container_width=True):
+        with st.spinner("Asking Gemma for a sidequest…"):
+            try:
+                quests.insert(0, api_client.generate_quest(user_id))
+            except BackendError as e:
+                st.error(f"Couldn't generate a quest: {e}")
+            else:
+                st.toast("New sidequest ready", icon="✨")
+
+    if quests:
+        latest = quests[0]
+        render_quest(latest)
+        if latest["status"] == "suggested":
+            feedback_form(latest)
+        else:
+            fb = latest.get("feedback") or {}
+            done = "✅ Completed" + (f" · {STARS[fb['rating']]}" if fb.get("rating") else "")
+            st.caption(done if latest["status"] == "completed" else "⏭️ Skipped")
+
+        if len(quests) > 1:
+            with st.expander(f"Quest history ({len(quests) - 1} earlier)"):
+                for rec in quests[1:]:
+                    fb = rec.get("feedback") or {}
+                    status_txt = {
+                        "completed": f"✅ {STARS.get(fb.get('rating'), '')}",
+                        "skipped": "⏭️ skipped",
+                        "suggested": "🕒 no feedback yet",
+                    }[rec["status"]]
+                    st.markdown(f"**{rec['quest']['title']}** - {status_txt}")
+                    if fb.get("comment"):
+                        st.caption(f"\u201c{fb['comment']}\u201d")
+    else:
+        st.write("No quests yet - hit **Generate sidequest** to get your first one.")

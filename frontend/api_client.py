@@ -30,9 +30,9 @@ def _detail(resp: requests.Response) -> str:
     return f"{resp.status_code}: {detail}"
 
 
-def _request(method: str, path: str, **kwargs: Any) -> requests.Response:
+def _request(method: str, path: str, timeout: float = TIMEOUT, **kwargs: Any) -> requests.Response:
     try:
-        return requests.request(method, f"{base_url()}{path}", timeout=TIMEOUT, **kwargs)
+        return requests.request(method, f"{base_url()}{path}", timeout=timeout, **kwargs)
     except requests.RequestException as exc:
         raise BackendError(f"Can't reach the backend at {base_url()} ({exc.__class__.__name__})") from exc
 
@@ -59,6 +59,38 @@ def save_preferences(user_id: str, prefs: PreferencesIn) -> dict:
         f"/users/{user_id}/preferences",
         data=prefs.model_dump_json(),
         headers={"Content-Type": "application/json"},
+    )
+    if not resp.ok:
+        raise BackendError(_detail(resp))
+    return resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Quests
+# ---------------------------------------------------------------------------
+
+GENERATE_TIMEOUT = 150  # the model may retry up to 3 times
+
+
+def generate_quest(user_id: str) -> dict:
+    resp = _request("POST", f"/users/{user_id}/quests", timeout=GENERATE_TIMEOUT)
+    if not resp.ok:
+        raise BackendError(_detail(resp))
+    return resp.json()
+
+
+def list_quests(user_id: str, limit: int = 20) -> list[dict]:
+    resp = _request("GET", f"/users/{user_id}/quests", params={"limit": limit})
+    if not resp.ok:
+        raise BackendError(_detail(resp))
+    return resp.json()
+
+
+def send_feedback(user_id: str, quest_id: int, completed: bool, rating: int | None, comment: str) -> dict:
+    resp = _request(
+        "POST",
+        f"/users/{user_id}/quests/{quest_id}/feedback",
+        json={"completed": completed, "rating": rating, "comment": comment},
     )
     if not resp.ok:
         raise BackendError(_detail(resp))

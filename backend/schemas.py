@@ -172,3 +172,68 @@ class PreferencesOut(PreferencesIn):
 
 
 USER_ID_PATTERN = r"^[A-Za-z0-9_.@-]{3,64}$"
+
+
+# ---------------------------------------------------------------------------
+# Quests & feedback
+# ---------------------------------------------------------------------------
+
+class QuestStatus(str, Enum):
+    SUGGESTED = "suggested"
+    COMPLETED = "completed"
+    SKIPPED = "skipped"
+
+
+class Quest(BaseModel):
+    """A single sidequest, as produced by the LLM (validated)."""
+
+    title: str = Field(..., min_length=3, max_length=120)
+    summary: str = Field(..., min_length=10, max_length=600)
+    steps: list[str] = Field(..., min_length=1, max_length=10)
+    estimated_minutes: int = Field(..., ge=5, le=720)
+    difficulty: Difficulty
+    energy_required: int = Field(..., ge=1, le=5)
+    setting: Setting
+    tags: list[str] = Field(default_factory=list, max_length=8)
+    accessibility_notes: str = Field("", max_length=400)
+    weather_backup: str = Field("", max_length=400, description="Plan B if the weather turns")
+    why_it_fits: str = Field("", max_length=400)
+
+    @field_validator("tags")
+    @classmethod
+    def clean_tags(cls, v: list[str]) -> list[str]:
+        return list(dict.fromkeys(t.strip().lower() for t in v if t.strip()))
+
+
+class FeedbackIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    completed: bool
+    rating: int | None = Field(None, ge=1, le=5, description="1 = hated it, 5 = loved it")
+    comment: str = Field("", max_length=500)
+
+    @model_validator(mode="after")
+    def rating_if_completed(self) -> "FeedbackIn":
+        if self.completed and self.rating is None:
+            raise ValueError("Please rate a quest you completed")
+        return self
+
+
+class FeedbackEntry(FeedbackIn):
+    """Feedback joined with the quest it refers to - what generate_quest() consumes."""
+
+    quest_title: str
+    quest_tags: list[str] = Field(default_factory=list)
+    created_at: datetime
+
+
+class QuestRecord(BaseModel):
+    """A stored quest plus its lifecycle metadata."""
+
+    id: int
+    user_id: str
+    status: QuestStatus
+    quest: Quest
+    feedback: FeedbackIn | None = None
+    created_at: datetime
+    model: str = ""

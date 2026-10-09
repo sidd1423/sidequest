@@ -1,0 +1,216 @@
+import json
+from datetime import datetime, timezone
+
+import pytest
+from fastapi.testclient import TestClient
+
+from backend.llm import GemmaClient, LLMError
+from backend.quest_generator import build_prompt, generate_quest, parse_quest
+from backend.schemas import FeedbackEntry, PreferencesIn, Quest
+
+from .test_api import VALID
+
+QUEST = {
+    "title": "Waterfront Morning Light Walk",
+    "summary": "Stroll the lakeshore at sunrise and photograph three reflections of the city.",
+    "steps": ["Head to the waterfront trail", "Find three reflections", "Pick your favourite shot"],
+    "estimated_minutes": 90,
+    "difficulty": "easy",
+    "energy_required": 2,
+    "setting": "outdoor",
+    "tags": ["Nature", "photography", "nature"],
+    "accessibility_notes": "Paved, step-free path with benches.",
+    "weather_backup": "Shoot reflections in a glass atrium downtown instead.",
+    "why_it_fits": "Quiet, easy, photography by the water.",
+}
+
+
+class FakeLLM:
+    model = "fake-gemma"
+
+    def __init__(self, *responses: str):
+        self.responses = list(responses)
+        self.prompts: list[str] = []
+
+    def complete(self, prompt: str, *, temperature: float = 0.9) -> str:
+        self.prompts.append(prompt)
+        return self.responses.pop(0)
+
+
+PROFILE = PreferencesIn.model_validate(VALID)
+
+
+# ---------------------------------------------------------------------------
+# generate_quest()
+# ---------------------------------------------------------------------------
+
+def test_first_run_needs_only_profile():
+    llm = FakeLLM(json.dumps(QUEST))
+    quest = generate_quest(PROFILE, llm=llm)
+    assert quest.title == QUEST["title"]
+    assert quest.tags == ["nature", "photography"]
+    assert "first quest" in llm.prompts[0]
+    assert "Past quests" not in llm.prompts[0]
+    assert "Feedback on previous" not in llm.prompts[0]
+
+
+def test_examples_and_feedback_reach_prompt():
+    example = Quest.model_validate({**QUEST, "title": "Sunset Sketch Session"})
+    fb = FeedbackEntry(
+        completed=False, rating=None, comment="too far away",
+        quest_title="Island Ferry Hop", created_at=datetime.now(timezone.utc),
+    )
+    prompt = build_prompt(PROFILE, [example], [fb])
+    assert "Sunset Sketch Session" in prompt
+    assert "Island Ferry Hop [skipped / not completed]" in prompt
+    assert "too far away" in prompt
+    assert "first quest" not in prompt
+
+
+def test_hard_constraints_in_prompt():
+    prompt = build_prompt(PROFILE)
+    assert "at most 120 minutes" in prompt
+    assert "no more than 25 km" in prompt
+    assert "between 8 and 28" in prompt
+
+
+def test_parses_fenced_json():
+    assert parse_quest("```json\n" + json.dumps(QUEST) + "\n```").title == QUEST["title"]
+
+
+def test_retries_bad_json_then_succeeds():
+    llm = FakeLLM("Sure! Here's a quest: not json", json.dumps(QUEST))
+    assert generate_quest(PROFILE, llm=llm).title == QUEST["title"]
+    assert "previous answer was rejected" in llm.prompts[1]
+
+
+def test_retries_when_quest_too_long():
+    too_long = {**QUEST, "estimated_minutes": 300}
+    llm = FakeLLM(json.dumps(too_long), json.dumps(QUEST))
+    assert generate_quest(PROFILE, llm=llm).estimated_minutes == 90
+    assert "exceeds" in llm.prompts[1]
+
+
+def test_retries_when_setting_wrong():
+    indoor = {**QUEST, "setting": "indoor"}
+    llm = FakeLLM(json.dumps(indoor), json.dumps(QUEST))
+    assert generate_quest(PROFILE, llm=llm).setting.value == "outdoor"
+
+
+def test_gives_up_after_three_attempts():
+    with pytest.raises(LLMError):
+        generate_quest(PROFILE, llm=FakeLLM("nope", "nope", "nope"))
+
+
+# ---------------------------------------------------------------------------
+# GemmaClient (HTTP mocked)
+# ---------------------------------------------------------------------------
+
+class FakeResp:
+    def __init__(self, status, body):
+        self.status_code, self._body = status, body
+        self.ok = 200 <= status < 300
+        self.text = json.dumps(body)
+
+    def json(self):
+        return self._body
+
+
+def test_gemma_client_request_shape(monkeypatch):
+    seen = {}
+
+    def fake_post(url, json, headers, timeout):
+        seen.update(url=url, json=json, headers=headers)
+        return FakeResp(200, {"choices": [{"message": {"content": "hi"}}]})
+
+    monkeypatch.setattr("backend.llm.requests.post", fake_post)
+    client = GemmaClient(base_url="https://example.test/v1/", api_key="k", model="gemma-3-27b-it")
+    assert client.complete("prompt") == "hi"
+    assert seen["url"] == "https://example.test/v1/chat/completions"
+    assert seen["headers"]["Authorization"] == "Bearer k"
+    assert seen["json"]["model"] == "gemma-3-27b-it"
+    assert seen["json"]["messages"] == [{"role": "user", "content": "prompt"}]
+
+
+def test_gemma_client_bad_key(monkeypatch):
+    monkeypatch.setattr("backend.llm.requests.post", lambda *a, **k: FakeResp(401, {"error": "bad"}))
+    with pytest.raises(LLMError, match="GEMMA_API_KEY"):
+        GemmaClient(base_url="https://x.test", api_key="bad").complete("p")
+
+
+# ---------------------------------------------------------------------------
+# API
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def api(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "test.db"))
+    from backend.main import app, get_llm
+
+    llm = FakeLLM()
+    app.dependency_overrides[get_llm] = lambda: llm
+    with TestClient(app) as c:
+        yield c, llm
+    app.dependency_overrides.clear()
+
+
+def test_generate_requires_preferences(api):
+    client, _ = api
+    assert client.post("/users/gowtham/quests").status_code == 404
+
+
+def test_full_loop_first_run_then_history(api):
+    client, llm = api
+    client.put("/users/gowtham/preferences", json=VALID)
+
+    # First quest: no examples, no feedback
+    llm.responses.append(json.dumps(QUEST))
+    r = client.post("/users/gowtham/quests")
+    assert r.status_code == 201, r.text
+    first = r.json()
+    assert first["status"] == "suggested" and first["model"] == "fake-gemma"
+    assert "first quest" in llm.prompts[-1]
+
+    # Complete it and rate it highly
+    r = client.post(f"/users/gowtham/quests/{first['id']}/feedback",
+                    json={"completed": True, "rating": 5, "comment": "loved the light"})
+    assert r.json()["status"] == "completed"
+
+    # Second quest: the first one is now both an example and feedback
+    llm.responses.append(json.dumps({**QUEST, "title": "Harbour Heron Hunt"}))
+    r = client.post("/users/gowtham/quests")
+    assert r.status_code == 201
+    prompt = llm.prompts[-1]
+    assert "Past quests this user enjoyed" in prompt and QUEST["title"] in prompt
+    assert "loved the light" in prompt
+
+    quests = client.get("/users/gowtham/quests").json()
+    assert [q["quest"]["title"] for q in quests] == ["Harbour Heron Hunt", QUEST["title"]]
+
+
+def test_low_rated_quest_is_feedback_not_example(api):
+    client, llm = api
+    client.put("/users/gowtham/preferences", json=VALID)
+    llm.responses += [json.dumps(QUEST), json.dumps(QUEST)]
+    qid = client.post("/users/gowtham/quests").json()["id"]
+    client.post(f"/users/gowtham/quests/{qid}/feedback", json={"completed": True, "rating": 2})
+    client.post("/users/gowtham/quests")
+    assert "Past quests" not in llm.prompts[-1]
+    assert "rated 2/5" in llm.prompts[-1]
+
+
+def test_feedback_validation(api):
+    client, llm = api
+    client.put("/users/gowtham/preferences", json=VALID)
+    llm.responses.append(json.dumps(QUEST))
+    qid = client.post("/users/gowtham/quests").json()["id"]
+    assert client.post(f"/users/gowtham/quests/{qid}/feedback", json={"completed": True}).status_code == 422
+    assert client.post("/users/gowtham/quests/999/feedback", json={"completed": False}).status_code == 404
+    assert client.post(f"/users/someone_else/quests/{qid}/feedback", json={"completed": False}).status_code == 404
+
+
+def test_llm_failure_returns_502(api):
+    client, llm = api
+    client.put("/users/gowtham/preferences", json=VALID)
+    llm.responses += ["x", "y", "z"]
+    assert client.post("/users/gowtham/quests").status_code == 502

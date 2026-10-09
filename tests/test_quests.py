@@ -124,11 +124,11 @@ def test_gemma_client_request_shape(monkeypatch):
         return FakeResp(200, {"choices": [{"message": {"content": "hi"}}]})
 
     monkeypatch.setattr("backend.llm.requests.post", fake_post)
-    client = GemmaClient(base_url="https://example.test/v1/", api_key="k", model="gemma-3-27b-it")
+    client = GemmaClient(base_url="https://example.test/v1/", api_key="k", model="gemma-4-26b-a4b-it")
     assert client.complete("prompt") == "hi"
     assert seen["url"] == "https://example.test/v1/chat/completions"
     assert seen["headers"]["Authorization"] == "Bearer k"
-    assert seen["json"]["model"] == "gemma-3-27b-it"
+    assert seen["json"]["model"] == "gemma-4-26b-a4b-it"
     assert seen["json"]["messages"] == [{"role": "user", "content": "prompt"}]
 
 

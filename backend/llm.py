@@ -2,7 +2,7 @@
 
 Works with any server that exposes `POST {base_url}/chat/completions`:
 
-  Google AI Studio (default)  https://generativelanguage.googleapis.com/v1beta/openai   model: gemma-3-27b-it
+  Google AI Studio (default)  https://generativelanguage.googleapis.com/v1beta/openai   model: gemma-4-26b-a4b-it
   Ollama (local)              http://localhost:11434/v1                                  model: gemma3
   vLLM / TGI / OpenRouter     your server's /v1 URL                                     model: as served
 
@@ -17,7 +17,7 @@ from typing import Protocol
 import requests
 
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
-DEFAULT_MODEL = "gemma-3-27b-it"
+DEFAULT_MODEL = "gemma-4-26b-a4b-it"
 
 
 class LLMError(RuntimeError):

@@ -24,8 +24,18 @@ AppState newState() => AppState(
       secure: secure,
     );
 
+/// The default test screen is 800x600, and ListView only builds items near the
+/// screen - so widgets further down a page "don't exist" for finders. A tall
+/// screen builds every item on our pages.
+void useTallScreen(WidgetTester tester) {
+  tester.view.physicalSize = const Size(800, 5000);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.reset);
+}
+
 /// Start the app like main() does: restore from the device, then show it.
 Future<AppState> startApp(WidgetTester tester) async {
+  useTallScreen(tester);
   final state = newState();
   await state.restore();
   await tester.pumpWidget(SidequestApp(state: state));
@@ -35,6 +45,7 @@ Future<AppState> startApp(WidgetTester tester) async {
 
 /// A returning user already logged in on this device.
 Future<AppState> startLoggedIn(WidgetTester tester, {bool withPrefs = true, int quests = 0}) async {
+  useTallScreen(tester);
   final user = backend.addUser(prefs: withPrefs ? Map.of(savedPrefs) : null);
   for (var i = 0; i < quests; i++) {
     backend.addQuest(user['id'] as String, title: i == 0 ? 'Bench Bird Count' : 'Quest $i');

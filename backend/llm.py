@@ -84,7 +84,15 @@ class GemmaClient:
             self.reasoning_effort = None
             resp = self._post(payload, headers)
 
-        if resp.status_code in (401, 403):
+        auth_problem = resp.status_code in (401, 403) or (
+            resp.status_code == 400 and "authorization" in resp.text.lower()
+        )
+        if auth_problem and not self.api_key:
+            raise LLMError(
+                "GEMMA_API_KEY is empty - put your key in the .env file in the repo root "
+                "(next to requirements.txt) and restart the backend"
+            )
+        if auth_problem:
             raise LLMError("Inference API rejected the key - check GEMMA_API_KEY in .env")
         if not resp.ok:
             raise LLMError(f"Inference API error {resp.status_code}: {resp.text[:300]}")

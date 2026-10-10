@@ -36,6 +36,10 @@ log = logging.getLogger("sidequest.api")
 async def lifespan(_: FastAPI):
     db.init_db()
     auth.init_auth()
+    if not os.getenv("GEMMA_API_KEY") and "googleapis" in os.getenv(
+        "GEMMA_BASE_URL", "https://generativelanguage.googleapis.com"
+    ):
+        log.warning("GEMMA_API_KEY is not set - quest generation will fail. Add it to .env and restart.")
     try:
         library.init_library()  # create/migrate/seed data/quest_library.db
     except Exception as exc:  # the app still works without the library

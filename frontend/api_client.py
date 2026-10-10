@@ -86,11 +86,19 @@ def list_quests(user_id: str, limit: int = 20) -> list[dict]:
     return resp.json()
 
 
-def send_feedback(user_id: str, quest_id: int, completed: bool, rating: int | None, comment: str) -> dict:
+def send_feedback(
+    user_id: str,
+    quest_id: int,
+    completed: bool,
+    rating: int | None,
+    comment: str,
+    time_logged_minutes: int | None = None,
+) -> dict:
     resp = _request(
         "POST",
         f"/users/{user_id}/quests/{quest_id}/feedback",
-        json={"completed": completed, "rating": rating, "comment": comment},
+        json={"completed": completed, "rating": rating, "comment": comment,
+              "time_logged_minutes": time_logged_minutes},
     )
     if not resp.ok:
         raise BackendError(_detail(resp))

@@ -365,6 +365,12 @@ def feedback_form(record: dict) -> None:
             format_func=STARS.get,
             key=f"rating_{record['id']}",
         )
+        time_spent = st.number_input(
+            "Time spent (minutes, if completed)",
+            min_value=0, max_value=1440, step=5,
+            value=int(record["quest"]["estimated_minutes"]),
+            key=f"time_{record['id']}",
+        )
         comment = st.text_input(
             "Comment (optional)",
             placeholder="What did you like or dislike?",
@@ -374,7 +380,8 @@ def feedback_form(record: dict) -> None:
             completed = outcome == "Completed it"
             try:
                 api_client.send_feedback(
-                    user_id, record["id"], completed, rating if completed else None, comment.strip()
+                    user_id, record["id"], completed, rating if completed else None, comment.strip(),
+                    int(time_spent) if completed else 0,
                 )
             except BackendError as e:
                 st.error(f"Couldn't send feedback: {e}")
@@ -413,6 +420,8 @@ else:
         else:
             fb = latest.get("feedback") or {}
             done = "✅ Completed" + (f" · {STARS[fb['rating']]}" if fb.get("rating") else "")
+            if fb.get("time_logged_minutes"):
+                done += f" · {fb['time_logged_minutes']} min logged"
             st.caption(done if latest["status"] == "completed" else "⏭️ Skipped")
 
         if len(quests) > 1:
@@ -420,7 +429,8 @@ else:
                 for rec in quests[1:]:
                     fb = rec.get("feedback") or {}
                     status_txt = {
-                        "completed": f"✅ {STARS.get(fb.get('rating'), '')}",
+                        "completed": f"✅ {STARS.get(fb.get('rating'), '')}"
+                        + (f" · {fb['time_logged_minutes']} min" if fb.get("time_logged_minutes") else ""),
                         "skipped": "⏭️ skipped",
                         "suggested": "🕒 no feedback yet",
                     }[rec["status"]]

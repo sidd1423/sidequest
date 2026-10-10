@@ -66,14 +66,29 @@ To run Gemma locally with Ollama instead, see the commented lines in `.env.examp
 
 Gemma gets the 3 example quests most similar to the user's profile.
 
-**Local (default)** - `data/quest_library.db` ships with the repo, pre-seeded
-with the 30 quests in `tiger/seed_quests.json`. Embeddings come from
+**Local (default)** - `data/quest_library.db` is created and seeded
+automatically when the backend starts (30 quests from `tiger/seed_quests.json`).
+It is git-ignored because it also stores users' generated quests and feedback. Embeddings come from
 [WordLlama](https://github.com/dleemiller/WordLlama) (256 dims), which runs
 offline with its weights bundled in the pip package - no API key needed.
 Ranking = cosine similarity + a small boost for category/tag matches with the
 user's interests, with quests that fit the time budget first.
 
-Re-seed after editing `tiger/seed_quests.json`:
+The same `quests` table also stores **every generated sidequest** and its
+feedback:
+
+| column | seeded quests | generated quests |
+|---|---|---|
+| `quest_text`, `category`, `duration_minutes`, `difficulty`, `tags`, `embedding` | from the seed file | title + summary, first interest tag, estimated minutes, ... |
+| `source` | `seed` | `generated` |
+| `time_logged_minutes` | `0` | `0` until feedback, then minutes the user logged |
+| `user_id`, `app_quest_id`, `title`, `quest_json`, `model` | - | set on generation |
+| `status`, `completed`, `rating`, `feedback_comment`, `feedback_at` | - | set when feedback is sent |
+
+Generated quests that were completed and rated 4+ become retrieval examples too.
+Older library files are migrated automatically on startup (rows are kept).
+
+Re-seed after editing `tiger/seed_quests.json` (generated rows are left alone):
 
 ```powershell
 python -m backend.library

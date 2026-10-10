@@ -33,6 +33,10 @@ log = logging.getLogger("sidequest.api")
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     db.init_db()
+    try:
+        library.init_library()  # create/migrate/seed data/quest_library.db
+    except Exception as exc:  # the app still works without the library
+        log.warning("Quest library unavailable: %s", exc)
     yield
 
 
@@ -124,7 +128,12 @@ def create_quest(
         quest = generate_quest(prefs, examples, history, llm=llm)
     except LLMError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-    return db.add_quest(user_id, quest, model=getattr(llm, "model", ""))
+    record = db.add_quest(user_id, quest, model=getattr(llm, "model", ""))
+    try:  # also keep it in the quest library alongside the seeded quests
+        library.add_generated(record.id, user_id, quest, model=record.model)
+    except Exception as exc:
+        log.warning("Couldn't add quest %s to the library: %s", record.id, exc)
+    return record
 
 
 @app.get("/users/{user_id}/quests", response_model=list[QuestRecord])
@@ -137,4 +146,8 @@ def give_feedback(feedback: FeedbackIn, quest_id: int, user_id: str = UserId) ->
     record = db.set_feedback(user_id, quest_id, feedback)
     if record is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Quest not found")
+    try:
+        library.record_feedback(quest_id, feedback)
+    except Exception as exc:
+        log.warning("Couldn't store feedback for quest %s in the library: %s", quest_id, exc)
     return record

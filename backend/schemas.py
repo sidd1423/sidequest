@@ -235,6 +235,9 @@ class FeedbackIn(BaseModel):
     completed: bool
     rating: int | None = Field(None, ge=1, le=5, description="1 = hated it, 5 = loved it")
     comment: str = Field("", max_length=500)
+    time_logged_minutes: int | None = Field(
+        None, ge=0, le=1440, description="How long the user actually spent on the quest"
+    )
 
     @model_validator(mode="after")
     def rating_if_completed(self) -> "FeedbackIn":

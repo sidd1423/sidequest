@@ -25,5 +25,5 @@ Thumbs.db
 *.db
 *.sqlite3
 
-# Seeded example-quest library (committed on purpose)
-!data/quest_library.db
+# Test fixture database (committed on purpose)
+!tests/fixtures/*.db

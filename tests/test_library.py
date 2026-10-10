@@ -80,9 +80,9 @@ def test_model_mismatch_detected(lib, tmp_path):
 def test_api_uses_local_library_on_first_quest(lib, tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
-    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "app.db"))
-    monkeypatch.setenv("LIBRARY_PATH", str(lib))
-    monkeypatch.delenv("TIGER_DATABASE_URL", raising=False)
+    copy = tmp_path / "lib_copy.db"  # the API writes generated quests into the library
+    copy.write_bytes(lib.read_bytes())
+    monkeypatch.setenv("LIBRARY_PATH", str(copy))
     from backend.main import app, get_llm
 
     llm = FakeLLM(json.dumps(QUEST))
@@ -97,3 +97,123 @@ def test_api_uses_local_library_on_first_quest(lib, tmp_path, monkeypatch):
     section = llm.prompts[-1].split("## Example quests matched to this user")[1].split("##")[0]
     assert section.count("\n- ") == 3
     assert "bird-watching" in section or "photograph" in section
+
+
+# ---------------------------------------------------------------------------
+# Generated quests + feedback stored in the library
+# ---------------------------------------------------------------------------
+
+from pathlib import Path  # noqa: E402
+
+from backend import library  # noqa: E402
+from backend.schemas import FeedbackIn, Quest  # noqa: E402
+
+OLD_FORMAT = Path(__file__).parent / "fixtures" / "old_format_library.db"
+
+
+def _rows(path, where="1=1"):
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute(f"select * from quests where {where} order by id")]
+    finally:
+        conn.close()
+
+
+def test_migrates_old_library_keeping_rows(tmp_path):
+    path = tmp_path / "lib.db"
+    path.write_bytes(OLD_FORMAT.read_bytes())
+    before = _rows(path)
+    assert "time_logged_minutes" not in before[0]
+
+    library.init_library(path)
+    after = _rows(path)
+    assert len(after) == len(before) == 30
+    assert all(r["time_logged_minutes"] == 0 and r["source"] == "seed" for r in after)
+    assert [r["quest_text"] for r in after] == [r["quest_text"] for r in before]
+    assert all(r["embedding"] == b["embedding"] for r, b in zip(after, before))
+
+    library.init_library(path)  # idempotent
+    assert seed(path) == 30     # re-seeding still upserts, no duplicates
+    assert len(_rows(path)) == 30
+
+
+def test_init_creates_and_seeds_missing_library(tmp_path):
+    path = tmp_path / "new" / "lib.db"
+    library.init_library(path)
+    rows = _rows(path)
+    assert len(rows) == 30 and {r["time_logged_minutes"] for r in rows} == {0}
+
+
+def test_generated_quest_and_feedback_rows(lib, tmp_path):
+    path = tmp_path / "lib.db"
+    path.write_bytes(lib.read_bytes())
+    library.init_library(path)
+    quest = Quest.model_validate(QUEST)
+
+    library.add_generated(7, "gowtham", quest, model="gemma-test", path=path)
+    library.add_generated(7, "gowtham", quest, model="gemma-test", path=path)  # no duplicate
+    [g] = _rows(path, "source = 'generated'")
+    assert g["app_quest_id"] == 7 and g["user_id"] == "gowtham" and g["title"] == QUEST["title"]
+    assert g["status"] == "suggested" and g["time_logged_minutes"] == 0
+    assert g["completed"] is None and g["rating"] is None
+    assert g["category"] in ("nature", "photography")
+    assert json.loads(g["quest_json"])["steps"] == QUEST["steps"]
+    assert len(g["embedding"]) == 256 * 4
+
+    # Not an example until it's completed and rated highly
+    r = LocalLibraryRetriever(path)
+    assert all(x.source == "local_library" for x in r.search(g["quest_text"], k=31))
+
+    fb = FeedbackIn(completed=True, rating=5, comment="loved it", time_logged_minutes=55)
+    assert library.record_feedback(7, fb, path=path)
+    [g] = _rows(path, "source = 'generated'")
+    assert (g["status"], g["completed"], g["rating"], g["feedback_comment"], g["time_logged_minutes"]) == \
+        ("completed", 1, 5, "loved it", 55)
+    assert g["feedback_at"]
+    top = r.search(g["quest_text"], k=1)[0]
+    assert top.source == "local_library_rated" and top.quest_text == g["quest_text"]
+
+
+def test_skipped_feedback(lib, tmp_path):
+    path = tmp_path / "lib.db"
+    path.write_bytes(lib.read_bytes())
+    library.init_library(path)
+    library.add_generated(9, "u1", Quest.model_validate(QUEST), path=path)
+    library.record_feedback(9, FeedbackIn(completed=False, rating=3, comment="rained"), path=path)
+    [g] = _rows(path, "app_quest_id = 9")
+    assert (g["status"], g["completed"], g["rating"], g["time_logged_minutes"]) == ("skipped", 0, None, 0)
+    assert library.record_feedback(999, FeedbackIn(completed=False), path=path) is False
+
+
+def test_api_writes_generated_quests_and_feedback_to_library(lib, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    path = tmp_path / "lib.db"
+    path.write_bytes(OLD_FORMAT.read_bytes())  # startup should migrate it
+    monkeypatch.setenv("LIBRARY_PATH", str(path))
+    from backend.main import app, get_llm
+
+    llm = FakeLLM(json.dumps(QUEST), json.dumps({**QUEST, "title": "Second Quest Title"}))
+    app.dependency_overrides[get_llm] = lambda: llm
+    try:
+        with TestClient(app) as c:
+            c.put("/users/gowtham/preferences", json=VALID)
+            q1 = c.post("/users/gowtham/quests").json()
+            r = c.post(f"/users/gowtham/quests/{q1['id']}/feedback",
+                       json={"completed": True, "rating": 5, "comment": "great", "time_logged_minutes": 80})
+            assert r.status_code == 200
+            assert r.json()["feedback"]["time_logged_minutes"] == 80
+            q2 = c.post("/users/gowtham/quests").json()
+    finally:
+        app.dependency_overrides.clear()
+
+    seeds = _rows(path, "source = 'seed'")
+    gen = _rows(path, "source = 'generated'")
+    assert len(seeds) == 30 and {s["time_logged_minutes"] for s in seeds} == {0}
+    assert [g["app_quest_id"] for g in gen] == [q1["id"], q2["id"]]
+    assert (gen[0]["rating"], gen[0]["time_logged_minutes"], gen[0]["status"]) == (5, 80, "completed")
+    assert (gen[1]["status"], gen[1]["time_logged_minutes"]) == ("suggested", 0)
+    # the loved quest is now offered back to Gemma as an example
+    section = llm.prompts[-1].split("## Example quests matched to this user")[1].split("##")[0]
+    assert QUEST["title"] in section

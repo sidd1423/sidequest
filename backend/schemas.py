@@ -205,6 +205,30 @@ class Quest(BaseModel):
         return list(dict.fromkeys(t.strip().lower() for t in v if t.strip()))
 
 
+class QuestExample(BaseModel):
+    """An example quest used to steer generation - from the Tiger Data library
+    or from the user's own highly-rated quests."""
+
+    quest_text: str
+    category: str = "general"
+    duration_minutes: int
+    difficulty: Difficulty
+    tags: list[str] = Field(default_factory=list)
+    similarity: float | None = None
+    source: str = "library"
+
+    @classmethod
+    def from_quest(cls, quest: "Quest") -> "QuestExample":
+        return cls(
+            quest_text=f"{quest.title}: {quest.summary}",
+            category=quest.tags[0] if quest.tags else "general",
+            duration_minutes=quest.estimated_minutes,
+            difficulty=quest.difficulty,
+            tags=quest.tags,
+            source="user_history",
+        )
+
+
 class FeedbackIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

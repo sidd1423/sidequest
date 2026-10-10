@@ -7,6 +7,9 @@ fastapi>=0.110
 uvicorn[standard]>=0.29
 pydantic>=2.6
 
+# Tiger Data (Postgres + pgvector) retrieval
+psycopg[binary]>=3.1
+
 # Shared
 python-dotenv>=1.0
 

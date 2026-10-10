@@ -10,7 +10,7 @@ from typing import Any, Sequence
 from pydantic import ValidationError
 
 from .llm import GemmaClient, LLMClient, LLMError
-from .schemas import FeedbackEntry, PreferencesIn, Quest
+from .schemas import FeedbackEntry, PreferencesIn, Quest, QuestExample
 
 MAX_ATTEMPTS = 3
 
@@ -36,10 +36,13 @@ def _profile_block(profile: PreferencesIn) -> str:
     return json.dumps(p, indent=2)
 
 
-def _examples_block(examples: Sequence[Quest]) -> str:
+def _examples_block(examples: Sequence[QuestExample]) -> str:
     lines = []
     for q in examples:
-        lines.append(f"- {q.title} ({q.estimated_minutes} min, {q.difficulty.value}; tags: {', '.join(q.tags)}): {q.summary}")
+        meta = f"{q.category}, {q.duration_minutes} min, {q.difficulty.value}"
+        if q.tags:
+            meta += f"; tags: {', '.join(q.tags)}"
+        lines.append(f"- {q.quest_text} ({meta})")
     return "\n".join(lines)
 
 
@@ -57,7 +60,7 @@ def _feedback_block(feedback: Sequence[FeedbackEntry]) -> str:
 
 def build_prompt(
     profile: PreferencesIn,
-    retrieved_examples: Sequence[Quest] | None = None,
+    retrieved_examples: Sequence[QuestExample] | None = None,
     feedback_history: Sequence[FeedbackEntry] | None = None,
 ) -> str:
     parts = [
@@ -80,7 +83,8 @@ def build_prompt(
     if retrieved_examples:
         parts += [
             "",
-            "## Past quests this user enjoyed (use as inspiration for style - do NOT repeat them)",
+            "## Example quests matched to this user (use them as inspiration for tone, scale and "
+            "specificity - create something NEW, do not copy them)",
             _examples_block(retrieved_examples),
         ]
 
@@ -91,7 +95,7 @@ def build_prompt(
             _feedback_block(feedback_history),
         ]
 
-    if not retrieved_examples and not feedback_history:
+    if not feedback_history:
         parts += ["", "This is the user's first quest - pick something welcoming that clearly matches their interests."]
 
     parts += [
@@ -160,7 +164,7 @@ def _violations(quest: Quest, profile: PreferencesIn) -> list[str]:
 
 def generate_quest(
     profile: PreferencesIn,
-    retrieved_examples: Sequence[Quest] | None = None,
+    retrieved_examples: Sequence[QuestExample] | None = None,
     feedback_history: Sequence[FeedbackEntry] | None = None,
     *,
     llm: LLMClient | None = None,

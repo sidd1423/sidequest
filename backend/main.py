@@ -12,13 +12,22 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, status
 
-from . import db
+from . import db, retrieval
 from .llm import GemmaClient, LLMClient, LLMError
 from .quest_generator import generate_quest
-from .schemas import USER_ID_PATTERN, FeedbackIn, PreferencesIn, PreferencesOut, QuestRecord
+from .schemas import (
+    USER_ID_PATTERN,
+    FeedbackEntry,
+    FeedbackIn,
+    PreferencesIn,
+    PreferencesOut,
+    QuestExample,
+    QuestRecord,
+)
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("sidequest.api")
 
 
 @asynccontextmanager
@@ -65,17 +74,46 @@ def get_llm() -> LLMClient:
     return GemmaClient()
 
 
+def get_retriever() -> retrieval.TigerRetriever | None:
+    """Tiger Data retriever, or None when TIGER_DATABASE_URL isn't set."""
+    return retrieval.TigerRetriever() if retrieval.is_configured() else None
+
+
+def find_examples(
+    user_id: str,
+    prefs: PreferencesIn,
+    history: list[FeedbackEntry] | None,
+    retriever: retrieval.TigerRetriever | None,
+    k: int = 3,
+) -> list[QuestExample]:
+    """Top-k example quests: Tiger Data vector search, falling back to the
+    user's own liked quests if Tiger isn't configured or is unreachable."""
+    if retriever is not None:
+        try:
+            examples = retriever.retrieve(prefs, history, k=k)
+            if examples:
+                return examples
+        except retrieval.RetrievalError as exc:
+            log.warning("Tiger retrieval failed, using local examples instead: %s", exc)
+    return db.retrieve_examples(user_id, prefs, k=k)
+
+
 @app.post("/users/{user_id}/quests", response_model=QuestRecord, status_code=status.HTTP_201_CREATED)
-def create_quest(user_id: str = UserId, llm: LLMClient = Depends(get_llm)) -> QuestRecord:
+def create_quest(
+    user_id: str = UserId,
+    llm: LLMClient = Depends(get_llm),
+    retriever: retrieval.TigerRetriever | None = Depends(get_retriever),
+) -> QuestRecord:
     """Generate a new sidequest from the user's saved preferences and history."""
     profile = db.get_preferences(user_id)
     if profile is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Save preferences before generating a quest")
 
     prefs = PreferencesIn.model_validate(profile.model_dump(exclude={"user_id", "created_at", "updated_at"}))
-    # Both are empty on a user's first run - generate_quest handles that.
-    examples = db.retrieve_examples(user_id, prefs) or None
+    # Feedback is empty on a user's first run; examples come from the Tiger
+    # library (so even new users get them) or, failing that, past liked quests.
     history = db.feedback_history(user_id) or None
+    examples = find_examples(user_id, prefs, history, retriever) or None
 
     try:
         quest = generate_quest(prefs, examples, history, llm=llm)

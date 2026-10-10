@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from backend.llm import GemmaClient, LLMError
 from backend.quest_generator import build_prompt, generate_quest, parse_quest
-from backend.schemas import FeedbackEntry, PreferencesIn, Quest
+from backend.schemas import FeedbackEntry, PreferencesIn, Quest, QuestExample
 
 from .test_api import VALID
 
@@ -55,7 +55,7 @@ def test_first_run_needs_only_profile():
 
 
 def test_examples_and_feedback_reach_prompt():
-    example = Quest.model_validate({**QUEST, "title": "Sunset Sketch Session"})
+    example = QuestExample.from_quest(Quest.model_validate({**QUEST, "title": "Sunset Sketch Session"}))
     fb = FeedbackEntry(
         completed=False, rating=None, comment="too far away",
         quest_title="Island Ferry Hop", created_at=datetime.now(timezone.utc),
@@ -145,10 +145,11 @@ def test_gemma_client_bad_key(monkeypatch):
 @pytest.fixture()
 def api(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "test.db"))
-    from backend.main import app, get_llm
+    from backend.main import app, get_llm, get_retriever
 
     llm = FakeLLM()
     app.dependency_overrides[get_llm] = lambda: llm
+    app.dependency_overrides[get_retriever] = lambda: None  # local fallback only
     with TestClient(app) as c:
         yield c, llm
     app.dependency_overrides.clear()
@@ -181,7 +182,7 @@ def test_full_loop_first_run_then_history(api):
     r = client.post("/users/gowtham/quests")
     assert r.status_code == 201
     prompt = llm.prompts[-1]
-    assert "Past quests this user enjoyed" in prompt and QUEST["title"] in prompt
+    assert "Example quests matched to this user" in prompt and QUEST["title"] in prompt
     assert "loved the light" in prompt
 
     quests = client.get("/users/gowtham/quests").json()
@@ -195,7 +196,7 @@ def test_low_rated_quest_is_feedback_not_example(api):
     qid = client.post("/users/gowtham/quests").json()["id"]
     client.post(f"/users/gowtham/quests/{qid}/feedback", json={"completed": True, "rating": 2})
     client.post("/users/gowtham/quests")
-    assert "Past quests" not in llm.prompts[-1]
+    assert "Example quests" not in llm.prompts[-1]
     assert "rated 2/5" in llm.prompts[-1]
 
 

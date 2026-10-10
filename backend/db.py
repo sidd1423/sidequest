@@ -20,6 +20,7 @@ from .schemas import (
     PreferencesOut,
     Quest,
     QuestRecord,
+    QuestExample,
     QuestStatus,
 )
 
@@ -188,10 +189,9 @@ def feedback_history(user_id: str, limit: int = 10) -> list[FeedbackEntry]:
     return entries
 
 
-def retrieve_examples(user_id: str, profile: PreferencesIn, k: int = 3, min_rating: int = 4) -> list[Quest]:
-    """Pick the user's best-liked completed quests, favouring ones that share
-    tags with their current interests. Simple keyword retrieval for now -
-    swap for embedding search later without changing callers."""
+def retrieve_examples(user_id: str, profile: PreferencesIn, k: int = 3, min_rating: int = 4) -> list[QuestExample]:
+    """Fallback retrieval when Tiger Data isn't configured: the user's
+    best-liked completed quests, favouring tag overlap with their interests."""
     with connect() as conn:
         rows = conn.execute(
             """SELECT data, feedback FROM quests
@@ -209,4 +209,4 @@ def retrieve_examples(user_id: str, profile: PreferencesIn, k: int = 3, min_rati
         # rating first, then interest overlap, then recency
         scored.append(((fb.rating or 0), overlap, -idx, quest))
     scored.sort(key=lambda t: t[:3], reverse=True)
-    return [q for *_, q in scored[:k]]
+    return [QuestExample.from_quest(q) for *_, q in scored[:k]]

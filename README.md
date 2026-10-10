@@ -7,7 +7,8 @@ Suggests "sidequests" that fit a user's interests, time, energy and constraints.
 ```
 Streamlit UI (app.py)  ──HTTP/JSON──▶  FastAPI backend (backend/)  ──▶  SQLite (sidequest.db)
         │                                      │
-        │                                      └──▶  Gemma via inference API (backend/llm.py)
+        │                                      ├──▶  Gemma via inference API (backend/llm.py)
+        │                                      └──▶  Tiger Data quest library (pgvector) (backend/retrieval.py)
         └──────── shared Pydantic schema (backend/schemas.py) ────────┘
 ```
 
@@ -24,6 +25,13 @@ Streamlit UI (app.py)  ──HTTP/JSON──▶  FastAPI backend (backend/)  ─
   - `retrieved_examples`: the user's top-rated completed quests (`db.retrieve_examples`)
   - `feedback_history`: their recent completed/skipped quests with ratings & comments (`db.feedback_history`)
   - Both are empty on a user's first quest, so they're optional.
+- **Example retrieval** `backend/retrieval.py`: turns the user's profile (and
+  quests they loved) into a query, embeds it with `gemini-embedding-001`
+  (768 dims), and pulls the 3 most similar quests from the Tiger Data `quests`
+  table by cosine similarity, preferring ones that fit the user's time. These
+  are passed to Gemma as `retrieved_examples`, so even first-time users get
+  examples. If Tiger isn't configured or is unreachable, it falls back to the
+  user's own top-rated quests.
 - **Gemma client** `backend/llm.py`: calls any OpenAI-compatible
   `/chat/completions` endpoint - Google AI Studio by default, or Ollama/vLLM/etc.
 
@@ -53,6 +61,22 @@ copy .env.example .env
 Then set `GEMMA_API_KEY` in `.env` (free key: https://aistudio.google.com/apikey).
 To run Gemma locally with Ollama instead, see the commented lines in `.env.example`.
 
+## Tiger Data quest library (optional)
+
+1. Create a Tiger Data service and copy its connection string.
+2. In `.env`, set `TIGER_DATABASE_URL=<connection string>`.
+3. Create the table and load the 30 example quests (`tiger/seed_quests.json`):
+
+   ```powershell
+   python -m tiger.seed           # creates table + HNSW index, embeds and upserts
+   python -m tiger.seed --check   # verify connection / row count
+   ```
+
+   Or run `tiger/schema.sql` in the Tiger console first and use `--skip-schema`.
+   Re-running the seed is safe (upserts on `quest_text`).
+
+Table: `quests(id, quest_text, category, duration_minutes, difficulty, tags text[], embedding vector(768), created_at)`
+
 ## Run
 
 Two terminals (activate the venv in each):
@@ -67,3 +91,6 @@ streamlit run app.py                  # UI on http://localhost:8501
 ```powershell
 pytest
 ```
+
+pgvector tests are skipped unless `TEST_PG_URL` points at a Postgres with the
+`vector` extension (they create and drop a `quests_test` table).

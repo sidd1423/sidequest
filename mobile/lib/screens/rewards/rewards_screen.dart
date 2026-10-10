@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../app_routes.dart';
 import '../../data/app_scope.dart';
 import '../../models/rewards.dart';
 
@@ -98,6 +99,9 @@ class _LevelCard extends StatelessWidget {
             Text('${rewards.points}', key: const Key('points_total'),
                 style: text.displaySmall?.copyWith(color: colors.onPrimaryContainer, fontWeight: FontWeight.bold)),
             Text('points', style: text.titleMedium?.copyWith(color: colors.onPrimaryContainer)),
+            if (rewards.spendablePoints != rewards.points)
+              Text('${rewards.spendablePoints} left to spend on streak freezes', key: const Key('spendable_points'),
+                  style: text.bodySmall?.copyWith(color: colors.onPrimaryContainer)),
             const SizedBox(height: 16),
             Text('Level ${rewards.level} · ${rewards.levelName}', key: const Key('level_name'),
                 style: text.titleLarge?.copyWith(color: colors.onPrimaryContainer)),
@@ -131,25 +135,30 @@ class _StatsRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget stat(IconData icon, String value, String label, String key) => Expanded(
+    Widget stat(IconData icon, String value, String label, String key, [VoidCallback? onTap]) => Expanded(
           child: Card(
             key: Key(key),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-              child: Column(
-                children: [
-                  Icon(icon),
-                  const SizedBox(height: 4),
-                  Text(value, style: Theme.of(context).textTheme.titleLarge),
-                  Text(label, textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall),
-                ],
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: onTap,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                child: Column(
+                  children: [
+                    Icon(icon),
+                    const SizedBox(height: 4),
+                    Text(value, style: Theme.of(context).textTheme.titleLarge),
+                    Text(label, textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ),
               ),
             ),
           ),
         );
     return Row(
       children: [
-        stat(Icons.local_fire_department_outlined, '${rewards.currentStreak}', 'day streak', 'stat_streak'),
+        stat(Icons.local_fire_department_outlined, '${AppScope.of(context).streak.current}', 'day streak',
+            'stat_streak', () => Navigator.of(context).pushNamed(AppRoutes.streak)),
         stat(Icons.check_circle_outline, '${rewards.completed}', 'completed', 'stat_completed'),
         stat(Icons.timer_outlined, '${rewards.minutesOutside}', 'min outside', 'stat_minutes'),
       ],
@@ -226,6 +235,7 @@ class _HowPointsWork extends StatelessWidget {
         ListTile(dense: true, title: Text('+5 for a photo, +2 for a note in the quest log')),
         ListTile(dense: true, title: Text("+5 for giving a quest a go, even if you didn't finish")),
         ListTile(dense: true, title: Text('+10 for every day in a row you complete a quest')),
+        ListTile(dense: true, title: Text('Spend 100 points on a streak freeze (your level never goes down)')),
       ],
     );
   }

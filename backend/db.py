@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS quests (
     feedback     TEXT,
     model        TEXT NOT NULL DEFAULT '',
     created_at   TEXT NOT NULL,
-    feedback_at  TEXT
+    feedback_at  TEXT,
+    completed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_quests_user ON quests (user_id, created_at);
 """
@@ -64,6 +65,15 @@ def connect() -> Iterator[sqlite3.Connection]:
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Columns added after the first release."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(quests)")}
+    if "completed_at" not in cols:
+        # When the quest was completed (for streaks). Older rows fall back to feedback_at.
+        conn.execute("ALTER TABLE quests ADD COLUMN completed_at TEXT")
 
 
 def _row_to_model(row: sqlite3.Row) -> PreferencesOut:
@@ -114,15 +124,17 @@ def delete_user_data(user_id: str) -> None:
     with connect() as conn:
         conn.execute("DELETE FROM user_preferences WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM quests WHERE user_id = ?", (user_id,))
-        if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'quest_logs'").fetchone():
-            conn.execute("DELETE FROM quest_logs WHERE user_id = ?", (user_id,))
+        for table in ("quest_logs", "streak_freezes"):
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name = ?", (table,)).fetchone():
+                conn.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
 
 
 def feedback_rows(user_id: str) -> list[tuple[int, Quest, FeedbackIn, datetime]]:
-    """(quest id, quest, feedback, when the feedback was given) for every rated quest."""
+    """(quest id, quest, feedback, when it was completed - or rated, if not completed) for every rated quest."""
     with connect() as conn:
+        _migrate(conn)
         rows = conn.execute(
-            """SELECT id, data, feedback, COALESCE(feedback_at, created_at) AS at FROM quests
+            """SELECT id, data, feedback, COALESCE(completed_at, feedback_at, created_at) AS at FROM quests
                WHERE user_id = ? AND feedback IS NOT NULL ORDER BY at""",
             (user_id,),
         ).fetchall()
@@ -211,14 +223,54 @@ def list_quests(user_id: str, limit: int = 20) -> list[QuestRecord]:
 def set_feedback(user_id: str, quest_id: int, feedback: FeedbackIn) -> QuestRecord | None:
     status = QuestStatus.COMPLETED if feedback.completed else QuestStatus.SKIPPED
     with connect() as conn:
-        cur = conn.execute(
-            "UPDATE quests SET feedback = ?, status = ?, feedback_at = ? WHERE id = ? AND user_id = ?",
-            (feedback.model_dump_json(), status.value, _now(), quest_id, user_id),
-        )
-        if cur.rowcount == 0:
+        _migrate(conn)
+        row = conn.execute(
+            "SELECT created_at, completed_at FROM quests WHERE id = ? AND user_id = ?", (quest_id, user_id)
+        ).fetchone()
+        if row is None:
             return None
+        now = _now()
+        completed_at = None
+        if feedback.completed:
+            # Keep the first completion time (re-sending/editing a rating must not move
+            # the streak day). Otherwise use when the app says it happened (it may sync
+            # hours later), kept between the quest's creation and now.
+            completed_at = row["completed_at"] or _completion_time(feedback.completed_at, row["created_at"], now)
+        conn.execute(
+            """UPDATE quests SET feedback = ?, status = ?, feedback_at = ?, completed_at = ?
+               WHERE id = ? AND user_id = ?""",
+            (feedback.model_dump_json(exclude={"completed_at"}), status.value, now, completed_at, quest_id, user_id),
+        )
         row = conn.execute("SELECT * FROM quests WHERE id = ?", (quest_id,)).fetchone()
     return _row_to_quest(row)
+
+
+def _completion_time(claimed: datetime | None, created_at: str, now: str) -> str:
+    if claimed is None:
+        return now
+    if claimed.tzinfo is None:
+        claimed = claimed.replace(tzinfo=timezone.utc)
+    created = datetime.fromisoformat(created_at)
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    clamped = min(max(claimed.astimezone(timezone.utc), created), datetime.fromisoformat(now))
+    return clamped.isoformat()
+
+
+def completion_times(user_id: str) -> list[datetime]:
+    """When each completed quest was completed (UTC)."""
+    with connect() as conn:
+        _migrate(conn)
+        rows = conn.execute(
+            """SELECT COALESCE(completed_at, feedback_at, created_at) AS at FROM quests
+               WHERE user_id = ? AND status = 'completed'""",
+            (user_id,),
+        ).fetchall()
+    out = []
+    for r in rows:
+        when = datetime.fromisoformat(r["at"])
+        out.append(when if when.tzinfo else when.replace(tzinfo=timezone.utc))
+    return out
 
 
 def feedback_history(user_id: str, limit: int = 10) -> list[FeedbackEntry]:

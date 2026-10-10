@@ -16,6 +16,8 @@ abstract final class AppRoutes {
   // Detail screens pushed from a tab
   static const questDetail = '/quest-detail';
   static const editAccount = '/account/edit';
+  static const streak = '/streak';
+  static const streakCelebration = '/streak/celebrate'; // after the day's first completed quest
 
   /// After logging in (or opening the app logged in): set up preferences
   /// first if this account has none yet, otherwise straight to Home.

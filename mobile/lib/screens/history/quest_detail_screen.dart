@@ -6,6 +6,7 @@ import '../../models/quest_record.dart';
 import '../../widgets/quest_journal.dart';
 import '../quest/quest_card.dart';
 import '../quest/quest_feedback_form.dart';
+import '../streak/streak_celebration_screen.dart';
 import 'quest_history_screen.dart';
 
 /// One past quest: the full quest card, its quest log (notes + photos), how
@@ -37,7 +38,13 @@ class QuestDetailScreen extends StatelessWidget {
                 if (record.feedback == null)
                   QuestFeedbackForm(
                     estimatedMinutes: record.quest.minutes,
-                    onSubmit: (QuestFeedback f) => state.sendFeedback(record.id, f),
+                    onSubmit: (QuestFeedback f) async {
+                      final wasExtended = state.streak.extendedToday;
+                      await state.sendFeedback(record.id, f);
+                      if (context.mounted && f.completed) {
+                        await StreakCelebrationScreen.showIfExtended(context, wasExtended: wasExtended);
+                      }
+                    },
                   )
                 else
                   _HowItWent(record: record),

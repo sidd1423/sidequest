@@ -10,6 +10,7 @@ class Rewards {
     required this.nextLevelName,
     required this.currentStreak,
     required this.bestStreak,
+    required this.spendablePoints,
     required this.completed,
     required this.minutesOutside,
     required this.photos,
@@ -25,6 +26,7 @@ class Rewards {
   final String? nextLevelName;
   final int currentStreak;
   final int bestStreak;
+  final int spendablePoints; // points minus what was spent on streak freezes
   final int completed;
   final int minutesOutside;
   final int photos;
@@ -49,6 +51,7 @@ class Rewards {
         nextLevelName: json['next_level_name'] as String?,
         currentStreak: (json['current_streak'] as num).toInt(),
         bestStreak: (json['best_streak'] as num).toInt(),
+        spendablePoints: (json['spendable_points'] as num?)?.toInt() ?? (json['points'] as num).toInt(),
         completed: (json['completed'] as num).toInt(),
         minutesOutside: (json['minutes_outside'] as num).toInt(),
         photos: (json['photos'] as num).toInt(),
@@ -65,6 +68,7 @@ class Rewards {
         'next_level_name': nextLevelName,
         'current_streak': currentStreak,
         'best_streak': bestStreak,
+        'spendable_points': spendablePoints,
         'completed': completed,
         'minutes_outside': minutesOutside,
         'photos': photos,

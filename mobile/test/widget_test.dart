@@ -11,6 +11,7 @@ import 'package:sidequest/data/app_state.dart';
 import 'package:sidequest/data/key_value_store.dart';
 import 'package:sidequest/main.dart';
 import 'package:sidequest/models/generated_quest.dart';
+import 'package:sidequest/models/streak.dart';
 import 'package:sidequest/screens/home_shell.dart';
 import 'package:sidequest/widgets/quest_journal.dart';
 
@@ -92,6 +93,13 @@ Future<void> tapAndSettle(WidgetTester tester, Finder finder) async {
   await tester.pumpAndSettle();
   await tester.tap(finder);
   await tester.pumpAndSettle();
+}
+
+/// The first completed quest of the day shows "N day streak!" - tap Continue.
+Future<void> continuePastStreak(WidgetTester tester) async {
+  expect(find.byKey(const Key('streak_celebration')), findsOneWidget);
+  await tapAndSettle(tester, find.byKey(const Key('streak_continue')));
+  expect(find.byKey(const Key('streak_celebration')), findsNothing);
 }
 
 Future<void> enter(WidgetTester tester, String key, String text) async {
@@ -254,6 +262,7 @@ void main() {
       backend.online = false;
       await tapAndSettle(tester, find.byKey(const Key('star_5')));
       await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
+      await continuePastStreak(tester); // the streak counts offline too
       expect(state.pendingChanges, 1);
       expect(find.byKey(const Key('quest_card')), findsNothing); // completed -> off the Quest screen
       expect(counter(tester), '1'); // counted right away, even offline
@@ -391,6 +400,7 @@ void main() {
       expect(submitButton(tester).onPressed, isNotNull);
       await enter(tester, 'feedback_comment', 'great light');
       await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
+      await continuePastStreak(tester);
 
       expect(find.byKey(const Key('quest_card')), findsNothing);
       expect(find.byKey(const Key('feedback_form')), findsNothing);
@@ -445,6 +455,7 @@ void main() {
 
       await tapAndSettle(tester, find.byKey(const Key('star_5')));
       await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
+      await continuePastStreak(tester);
       expect(find.byKey(const Key('quest_detail_feedback')), findsOneWidget);
       expect(backend.quests[state.account!.id]!.single['status'], 'completed');
 
@@ -666,6 +677,215 @@ void main() {
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
       await tapAndSettle(tester, find.byKey(const Key('instagram_post_button')));
       expect(find.textContaining('Instagram posts is coming soon'), findsOneWidget);
+    });
+  });
+  group('Daily streak', () {
+    String streakText(WidgetTester tester) => textOf(tester, 'streak_count');
+
+    Map<String, dynamic> streakBody({
+      required int current,
+      required bool extendedToday,
+      required List<int> doneDaysAgo,
+      int freezes = 0,
+      int lost = 0,
+    }) =>
+        {
+          'current': current,
+          'best': current,
+          'extended_today': extendedToday,
+          'freezes': freezes,
+          'next_milestone': StreakInfo.defaultMilestones.firstWhere((m) => m > current),
+          'lost_streak': lost,
+          'today': fakeToday(),
+          'completed_days': [for (final d in doneDaysAgo) fakeToday(d)],
+          'frozen_days': <String>[],
+        };
+
+    testWidgets('completing the first quest of the day lights the flame and celebrates', (tester) async {
+      final state = await startLoggedIn(tester);
+      expect(streakText(tester), '0 day streak');
+      expect(find.textContaining('to start a streak'), findsOneWidget);
+
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      await tapAndSettle(tester, find.byKey(const Key('star_5')));
+      await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
+
+      expect(textOf(tester, 'celebration_count'), '1');
+      expect(find.textContaining('You started a streak'), findsOneWidget);
+      expect(find.byKey(const Key('week_strip')), findsOneWidget);
+      await continuePastStreak(tester);
+
+      expect(streakText(tester), '1 day streak');
+      expect(find.textContaining("Today's done"), findsOneWidget);
+      expect(state.streak.extendedToday, isTrue);
+      expect(backend.requests, contains('GET /users/${state.account!.id}/streak'));
+      // The completion time travels with the feedback (for offline syncs).
+      expect(backend.quests[state.account!.id]!.first['completed_at'], isNotNull);
+      expect(backend.quests[state.account!.id]!.first['feedback'].containsKey('completed_at'), isFalse);
+    });
+
+    testWidgets('a second quest on the same day does not celebrate again', (tester) async {
+      await startLoggedIn(tester);
+      for (var i = 0; i < 2; i++) {
+        await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+        await tapAndSettle(tester, find.byKey(const Key('star_4')));
+        await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
+        if (i == 0) await continuePastStreak(tester);
+      }
+      expect(find.byKey(const Key('streak_celebration')), findsNothing);
+      expect(streakText(tester), '1 day streak');
+    });
+
+    testWidgets('a skipped quest does not count', (tester) async {
+      await startLoggedIn(tester);
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      await tapAndSettle(tester, find.byKey(const Key('outcome_not_finished')));
+      await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
+      expect(find.byKey(const Key('streak_celebration')), findsNothing);
+      expect(streakText(tester), '0 day streak');
+    });
+
+    testWidgets('a running streak not done today is at risk, urgently in the evening', (tester) async {
+      final user = backend.addUser(prefs: Map.of(savedPrefs));
+      final id = user['id'] as String;
+      backend.streakOverride[id] = streakBody(current: 4, extendedToday: false, doneDaysAgo: [1, 2, 3, 4]);
+      await secure.write('session', jsonEncode(backend.sessionFor(id)));
+      useTallScreen(tester);
+      final state = newState();
+      final now = DateTime.now();
+      state.clock = () => DateTime(now.year, now.month, now.day, 20);
+      await state.restore();
+      await state.sync();
+      await tester.pumpWidget(SidequestApp(state: state));
+      await tester.pumpAndSettle();
+
+      expect(streakText(tester), '4 day streak');
+      expect(find.byKey(const Key('streak_at_risk')), findsOneWidget);
+      expect(find.text('Only 4 hours left! Complete a quest to keep your streak.'), findsOneWidget);
+    });
+
+    testWidgets('hitting 7 days is a milestone and earns a free freeze', (tester) async {
+      final user = backend.addUser(prefs: Map.of(savedPrefs));
+      final id = user['id'] as String;
+      backend.streakOverride[id] = streakBody(current: 6, extendedToday: false, doneDaysAgo: [1, 2, 3, 4, 5, 6]);
+      await secure.write('session', jsonEncode(backend.sessionFor(id)));
+      useTallScreen(tester);
+      final state = newState();
+      await state.restore();
+      await state.sync();
+      await tester.pumpWidget(SidequestApp(state: state));
+      await tester.pumpAndSettle();
+
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      await tapAndSettle(tester, find.byKey(const Key('star_5')));
+      await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
+
+      expect(textOf(tester, 'celebration_count'), '7');
+      expect(find.byKey(const Key('celebration_milestone')), findsOneWidget);
+      expect(find.byKey(const Key('celebration_free_freeze')), findsOneWidget);
+      await continuePastStreak(tester);
+      expect(streakText(tester), '7 day streak');
+    });
+
+    testWidgets('streak page: calendar, milestone and buying a freeze', (tester) async {
+      final user = backend.addUser(prefs: Map.of(savedPrefs));
+      final id = user['id'] as String;
+      for (var i = 0; i < 10; i++) {
+        backend.addQuest(id, title: 'Done $i', feedback: {'completed': true, 'rating': 5}); // 100 points
+      }
+      await secure.write('session', jsonEncode(backend.sessionFor(id)));
+      useTallScreen(tester);
+      final state = newState();
+      await state.restore();
+      await state.sync();
+      await tester.pumpWidget(SidequestApp(state: state));
+      await tester.pumpAndSettle();
+
+      await tapAndSettle(tester, find.byKey(const Key('streak_card')));
+      expect(find.byKey(const Key('streak_screen')), findsOneWidget);
+      expect(textOf(tester, 'streak_big_count'), '1');
+      final now = DateTime.now();
+      expect(find.byKey(Key('calendar_${now.year}-${now.month}-${now.day}_done')), findsOneWidget);
+      expect(find.text('2 days to go'), findsOneWidget); // next milestone: 3
+      expect(textOf(tester, 'freeze_count'), '0 of 2');
+
+      await tapAndSettle(tester, find.byKey(const Key('buy_freeze_button')));
+      expect(textOf(tester, 'freeze_count'), '1 of 2');
+      expect(find.textContaining('Streak freeze ready'), findsOneWidget);
+      expect(backend.requests, contains('POST /users/$id/streak/freeze'));
+      // 0 points left: can't buy another.
+      final button = tester.widget<FilledButton>(find.byKey(const Key('buy_freeze_button')));
+      expect(button.onPressed, isNull);
+
+      await tapAndSettle(tester, find.byKey(const Key('calendar_previous')));
+      expect(find.byKey(Key('calendar_${now.year}-${now.month}-${now.day}_done')), findsNothing);
+    });
+
+    testWidgets('the streak shows offline from the device copy', (tester) async {
+      final user = backend.addUser(prefs: Map.of(savedPrefs));
+      final id = user['id'] as String;
+      backend.streakOverride[id] = streakBody(current: 12, extendedToday: true, doneDaysAgo: [0, 1, 2]);
+      await secure.write('session', jsonEncode(backend.sessionFor(id)));
+      useTallScreen(tester);
+      final first = newState();
+      await first.restore();
+      await first.sync();
+
+      backend.online = false;
+      await startApp(tester);
+      expect(streakText(tester), '12 day streak');
+    });
+  });
+
+  group('StreakInfo (rolled forward on the device)', () {
+    final today = DateTime(2026, 10, 10);
+    StreakInfo info({required int current, required bool extended, int freezes = 0, required List<int> doneDaysAgo}) =>
+        StreakInfo.fromJson({
+          'current': current,
+          'best': current,
+          'extended_today': extended,
+          'freezes': freezes,
+          'next_milestone': StreakInfo.defaultMilestones.firstWhere((m) => m > current),
+          'today': '2026-10-10',
+          'completed_days': [
+            for (final d in doneDaysAgo) DateTime(2026, 10, 10 - d).toIso8601String().substring(0, 10),
+          ],
+          'frozen_days': <String>[],
+        });
+
+    test('the next day puts a finished streak at risk', () {
+      final s = info(current: 5, extended: true, doneDaysAgo: [0, 1]).asOf(DateTime(2026, 10, 11, 9));
+      expect((s.current, s.extendedToday, s.atRisk), (5, false, true));
+    });
+
+    test('a missed day uses a freeze', () {
+      final s = info(current: 5, extended: true, freezes: 1, doneDaysAgo: [0]).asOf(DateTime(2026, 10, 12, 9));
+      expect((s.current, s.freezes, s.atRisk), (5, 0, true));
+      expect(s.frozenDays, {DateTime(2026, 10, 11)});
+    });
+
+    test('a missed day without a freeze loses the streak', () {
+      final s = info(current: 5, extended: true, doneDaysAgo: [0]).asOf(DateTime(2026, 10, 12, 9));
+      expect((s.current, s.lostStreak, s.atRisk), (0, 5, false));
+    });
+
+    test('today not done yet, then midnight passes', () {
+      final s = info(current: 3, extended: false, doneDaysAgo: [1, 2, 3]).asOf(DateTime(2026, 10, 11, 0, 5));
+      expect((s.current, s.lostStreak), (0, 3));
+    });
+
+    test('completing extends once per day and hands out a freeze every 7 days', () {
+      final s = info(current: 6, extended: false, doneDaysAgo: [1]).withCompletion(DateTime(2026, 10, 10, 8));
+      expect((s.current, s.extendedToday, s.freezes, s.isMilestone), (7, true, 1, true));
+      expect(s.withCompletion(DateTime(2026, 10, 10, 9)).current, 7);
+      expect(s.nextMilestone, 14);
+    });
+
+    test('survives a round trip through the device cache', () {
+      final s = info(current: 2, extended: true, freezes: 1, doneDaysAgo: [0, 1]);
+      final back = StreakInfo.fromJson(jsonDecode(jsonEncode(s.toJson())) as Map<String, dynamic>);
+      expect((back.current, back.freezes, back.today), (2, 1, today));
+      expect(back.completedDays, s.completedDays);
     });
   });
 }

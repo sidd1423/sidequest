@@ -302,6 +302,11 @@ class FeedbackIn(BaseModel):
     time_logged_minutes: int | None = Field(
         None, ge=0, le=1440, description="How long the user actually spent on the quest"
     )
+    completed_at: datetime | None = Field(
+        None,
+        description="When the quest was completed (the app may sync it later). Counts for the "
+        "daily streak; not stored in the feedback itself. Defaults to when the feedback arrives.",
+    )
 
     @model_validator(mode="after")
     def rating_if_completed(self) -> "FeedbackIn":

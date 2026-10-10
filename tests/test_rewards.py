@@ -28,15 +28,6 @@ def test_quest_points(difficulty, fb, photos, notes, expected):
     assert rewards.quest_points(q(difficulty), fb, photos, notes)[0] == expected
 
 
-def test_streaks():
-    d = date(2026, 10, 10)
-    days = {date(2026, 10, 1), date(2026, 10, 2), date(2026, 10, 3), date(2026, 10, 9), d}
-    current, best, extra = rewards._streaks(days, d)
-    assert (current, best, extra) == (2, 3, 3)
-    assert rewards._streaks({date(2026, 10, 9)}, d)[0] == 1  # yesterday still counts
-    assert rewards._streaks({date(2026, 10, 7)}, d)[0] == 0
-
-
 def test_levels():
     assert rewards._level(0)[:2] == (1, "Homebody")
     assert rewards._level(149)[:2] == (2, "Stroller")

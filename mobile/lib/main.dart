@@ -11,6 +11,8 @@ import 'screens/auth/preferences_setup_screen.dart';
 import 'screens/auth/sign_up_screen.dart';
 import 'screens/history/quest_detail_screen.dart';
 import 'screens/home_shell.dart';
+import 'screens/streak/streak_celebration_screen.dart';
+import 'screens/streak/streak_screen.dart';
 import 'theme.dart';
 
 Future<void> main() async {
@@ -45,6 +47,8 @@ class SidequestApp extends StatelessWidget {
     AppRoutes.preferencesSetup: (_) => const PreferencesSetupScreen(),
     AppRoutes.home: (_) => const HomeShell(),
     AppRoutes.editAccount: (_) => const EditAccountScreen(),
+    AppRoutes.streak: (_) => const StreakScreen(),
+    AppRoutes.streakCelebration: (_) => const StreakCelebrationScreen(),
   };
 
   /// On web the first route comes from the browser address bar (refresh,
@@ -52,7 +56,9 @@ class SidequestApp extends StatelessWidget {
   String _safeInitialRoute(String name) {
     const authScreens = {AppRoutes.login, AppRoutes.signUp};
     if (!state.isLoggedIn) return authScreens.contains(name) ? name : AppRoutes.login;
-    if (!routes.containsKey(name) || authScreens.contains(name)) return AppRoutes.afterLogin(state);
+    if (!routes.containsKey(name) || authScreens.contains(name) || name == AppRoutes.streakCelebration) {
+      return AppRoutes.afterLogin(state);
+    }
     return name;
   }
 

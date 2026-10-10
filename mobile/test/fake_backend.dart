@@ -17,6 +17,11 @@ class FakeBackend {
   final logs = <String, List<Map<String, dynamic>>>{}; // user id -> journal entries (with 'image' bytes as base64)
   int _nextLog = 1;
   Map<String, dynamic>? lastQuestSettings;
+
+  /// Streak to return instead of the simple default (user id -> GET /streak body).
+  /// Completing a quest bumps it like the real server would.
+  final streakOverride = <String, Map<String, dynamic>>{};
+  final streakFreezes = <String, int>{}; // bought, per user
   int _nextQuest = 1;
   int _nextToken = 1;
 
@@ -164,6 +169,21 @@ class FakeBackend {
         ],
       });
     }
+    if (segments[2] == 'streak') {
+      if (segments.length == 4 && segments[3] == 'freeze' && request.method == 'POST') {
+        final current = _streak(userId);
+        final points = current['spendable_points'] as int;
+        if ((current['freezes'] as int) >= 2) {
+          return _error(409, "You already have 2 streak freezes - that's the most you can hold");
+        }
+        if (points < 100) return _error(409, 'A streak freeze costs 100 points - you have $points');
+        streakFreezes[userId] = (streakFreezes[userId] ?? 0) + 1;
+        final o = streakOverride[userId];
+        if (o != null) o['freezes'] = (o['freezes'] as int) + 1;
+        return _json(_streak(userId), 201);
+      }
+      return _json(_streak(userId));
+    }
     if (segments[2] == 'stats') {
       final list = quests[userId] ?? [];
       return _json({
@@ -239,12 +259,61 @@ class FakeBackend {
       if (matches.isEmpty) return _error(404, 'Quest not found');
       final record = matches.first;
       final fb = body as Map<String, dynamic>;
+      final newlyCompleted = fb['completed'] == true && record['status'] != 'completed';
+      record['completed_at'] = fb.remove('completed_at'); // like the server: not part of the feedback
       record['feedback'] = fb;
       record['status'] = fb['completed'] == true ? 'completed' : 'skipped';
+      final o = streakOverride[userId];
+      if (newlyCompleted && o != null && o['extended_today'] != true) {
+        o['current'] = (o['current'] as int) + 1;
+        o['extended_today'] = true;
+        if ((o['current'] as int) % 7 == 0 && (o['freezes'] as int) < 2) o['freezes'] = (o['freezes'] as int) + 1;
+        o['completed_days'] = [...o['completed_days'] as List<dynamic>, o['today']];
+      }
       return _json(record);
     }
     return _error(404, 'Not found');
   }
+}
+
+extension on FakeBackend {
+  /// Simplified backend/streak.py: 1-day streak once anything is completed;
+  /// 10 points per completed quest, 100 per freeze bought.
+  Map<String, dynamic> _streak(String userId) {
+    final spent = (streakFreezes[userId] ?? 0) * 100;
+    final done = (quests[userId] ?? []).where((q) => q['status'] == 'completed').length;
+    final override = streakOverride[userId];
+    final today = fakeToday();
+    final base = override ??
+        {
+          'current': done > 0 ? 1 : 0,
+          'best': done > 0 ? 1 : 0,
+          'extended_today': done > 0,
+          'freezes': streakFreezes[userId] ?? 0,
+          'next_milestone': 3,
+          'lost_streak': 0,
+          'today': today,
+          'completed_days': [if (done > 0) today],
+          'frozen_days': <String>[],
+        };
+    final points = done * 10 - spent;
+    return {
+      ...base,
+      'max_freezes': 2,
+      'freeze_cost': 100,
+      'freeze_every': 7,
+      'spendable_points': points,
+      'can_buy_freeze': (base['freezes'] as int) < 2 && points >= 100,
+      'milestones': [3, 7, 14, 30, 50, 100, 180, 365, 500, 1000],
+    };
+  }
+}
+
+/// Today's date like the server sends it (YYYY-MM-DD, the device's time zone).
+String fakeToday([int daysAgo = 0]) {
+  final now = DateTime.now();
+  final d = DateTime(now.year, now.month, now.day - daysAgo);
+  return '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 }
 
 /// Preferences body a returning user already has on the server.

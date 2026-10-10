@@ -5,7 +5,9 @@ import '../../data/app_scope.dart';
 import '../../models/generated_quest.dart';
 import '../../models/preference_options.dart';
 import '../../widgets/quest_journal.dart';
+import '../../widgets/streak_widgets.dart';
 import '../auth/auth_scaffold.dart' show AuthError;
+import '../streak/streak_celebration_screen.dart';
 import 'quest_card.dart';
 import 'quest_feedback_form.dart';
 
@@ -75,6 +77,7 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
     final messenger = ScaffoldMessenger.of(context);
     final quest = state.activeQuest;
     if (quest == null) return;
+    final wasExtended = state.streak.extendedToday;
     await state.sendFeedback(quest.id, feedback); // saved on the device; sent now or when online
     final synced = state.isOnline ? '' : " It'll sync when you're back online.";
     messenger
@@ -84,6 +87,8 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
             ? 'Quest complete! That\'s ${state.completedCount} so far - it\'s in History now.$synced'
             : 'Thanks! Your next quest will take this into account.$synced'),
       ));
+    // First completed quest today: "N day streak!"
+    if (mounted && feedback.completed) await StreakCelebrationScreen.showIfExtended(context, wasExtended: wasExtended);
   }
 
   @override
@@ -104,6 +109,8 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
         key: const Key('quest_generator_screen'),
         padding: const EdgeInsets.all(16),
         children: [
+          const StreakStatusCard(),
+          const SizedBox(height: 8),
           _CompletedCounter(count: state.completedCount),
           const SizedBox(height: 16),
           Text('Got a few minutes?', style: theme.textTheme.headlineSmall),

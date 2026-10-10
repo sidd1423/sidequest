@@ -10,17 +10,20 @@ Points per quest
   + 2 if you wrote a note.
 - Didn't finish but spent time on it: 5 ("gave it a go").
 - Streaks: every day in a row (after the first) with a completed quest: +10.
+  Streak rules (days in your time zone, streak freezes) live in streak.py.
+- Points spent on streak freezes come off `spendable_points`, never off
+  `points` (so you never lose a level by buying a freeze).
 
 Levels every few hundred points; badges for milestones.
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime
 
 from pydantic import BaseModel
 
-from . import db
+from . import db, streak as streak_mod
 from .schemas import FeedbackIn, Quest
 
 DIFFICULTY_POINTS = {"easy": 10, "moderate": 20, "challenging": 35, "extreme": 50}
@@ -67,8 +70,9 @@ class Rewards(BaseModel):
     level_floor: int  # points where this level started
     next_level_at: int | None  # None at the top level
     next_level_name: str | None
-    current_streak: int  # days in a row (ending today or yesterday) with a completed quest
+    current_streak: int  # see streak.py (freezes keep it alive)
     best_streak: int
+    spendable_points: int  # points minus what was spent on streak freezes
     completed: int
     minutes_outside: int
     photos: int
@@ -98,28 +102,6 @@ def quest_points(quest: Quest, fb: FeedbackIn, photos: int = 0, notes: int = 0) 
     return 0, []
 
 
-def _streaks(days: set[date], today: date) -> tuple[int, int, int]:
-    """(current streak, best streak, number of 'extra' streak days for bonus points)."""
-    if not days:
-        return 0, 0, 0
-    ordered = sorted(days)
-    best = run = 1
-    extra = 0
-    for prev, cur in zip(ordered, ordered[1:]):
-        if cur - prev == timedelta(days=1):
-            run += 1
-            extra += 1
-        else:
-            run = 1
-        best = max(best, run)
-    current = 0
-    day = today if today in days else today - timedelta(days=1)
-    while day in days:
-        current += 1
-        day -= timedelta(days=1)
-    return current, best, extra
-
-
 def _level(points: int) -> tuple[int, str, int, int | None, str | None]:
     idx = max(i for i, (need, _) in enumerate(LEVELS) if points >= need)
     floor, name = LEVELS[idx]
@@ -136,6 +118,7 @@ def _badges(completed: int, minutes: int, photos: int, best_streak: int, hard: i
         ("photographer", "Snapshot", "Add a photo to a quest", photos, 1),
         ("streak_3", "On a roll", "Complete quests 3 days in a row", best_streak, 3),
         ("streak_7", "Week warrior", "Complete quests 7 days in a row", best_streak, 7),
+        ("streak_30", "Unstoppable", "Keep a 30-day streak", best_streak, 30),
         ("challenger", "Challenger", "Complete a challenging or extreme quest", hard, 1),
     ]
     return [
@@ -144,8 +127,8 @@ def _badges(completed: int, minutes: int, photos: int, best_streak: int, hard: i
     ]
 
 
-def compute(user_id: str, today: date | None = None) -> Rewards:
-    today = today or datetime.now(timezone.utc).date()
+def compute(user_id: str, today: date | None = None, tz_offset_minutes: int = 0) -> Rewards:
+    today = today or streak_mod.local_today(tz_offset_minutes)
     rows = db.feedback_rows(user_id)
     journal = db.journal_counts(user_id)
     entries: list[PointsEntry] = []
@@ -157,13 +140,14 @@ def compute(user_id: str, today: date | None = None) -> Rewards:
         minutes += fb.time_logged_minutes or 0
         if fb.completed:
             completed += 1
-            days.add(when.astimezone(timezone.utc).date())
+            days.add(streak_mod.local_day(when, tz_offset_minutes))
             hard += quest.difficulty.value in ("challenging", "extreme")
         if pts:
             entries.append(PointsEntry(quest_id=quest_id, title=quest.title, points=pts, reasons=reasons, date=when))
 
-    current, best, extra_days = _streaks(days, today)
-    points = sum(e.points for e in entries) + extra_days * STREAK_DAY_POINTS
+    run = streak_mod.replay(days, streak_mod.purchase_days(user_id, tz_offset_minutes), today)
+    current, best = run.current, run.best
+    points = sum(e.points for e in entries) + run.bonus_days * STREAK_DAY_POINTS
     level, name, floor, next_at, next_name = _level(points)
     photo_total = sum(p for p, _ in journal.values())
     entries.sort(key=lambda e: e.date, reverse=True)
@@ -171,6 +155,7 @@ def compute(user_id: str, today: date | None = None) -> Rewards:
         points=points, level=level, level_name=name, level_floor=floor,
         next_level_at=next_at, next_level_name=next_name,
         current_streak=current, best_streak=best,
+        spendable_points=max(0, points - streak_mod.points_spent(user_id)),
         completed=completed, minutes_outside=minutes, photos=photo_total,
         badges=_badges(completed, minutes, photo_total, best, hard),
         recent=entries[:20],

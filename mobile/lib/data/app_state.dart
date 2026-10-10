@@ -10,6 +10,7 @@ import '../models/journal_entry.dart';
 import '../models/profile_preferences.dart';
 import '../models/quest_record.dart';
 import '../models/rewards.dart';
+import '../models/streak.dart';
 import 'api_client.dart';
 import 'key_value_store.dart';
 
@@ -41,7 +42,7 @@ class AppState extends ChangeNotifier {
   final KeyValueStore _secure;
 
   static const _sessionKey = 'session';
-  static const _cacheNames = ['profile', 'quests', 'outbox', 'meta', 'journal', 'rewards'];
+  static const _cacheNames = ['profile', 'quests', 'outbox', 'meta', 'journal', 'rewards', 'streak'];
 
   Session? _session;
   ProfilePreferences? _profile;
@@ -53,6 +54,7 @@ class AppState extends ChangeNotifier {
   String? _lastSyncError;
   int _completedCount = 0;
   Rewards? _rewards;
+  StreakInfo? _streak;
   int? _activeQuestId;
   Map<int, List<JournalEntry>> _journals = {};
   final Map<String, Uint8List> _photoCache = {}; // downloaded photos, by client id (memory only)
@@ -69,6 +71,16 @@ class AppState extends ChangeNotifier {
 
   /// Points, level, streaks and badges (last copy from the server; null until loaded).
   Rewards? get rewards => _rewards;
+
+  /// The daily streak, rolled forward to right now (a new day can put it at
+  /// risk or use a freeze even before the server is asked). Never null.
+  StreakInfo get streak => (_streak ?? StreakInfo.empty(clock())).asOf(clock());
+
+  /// "Now" - swappable in tests.
+  DateTime Function() clock = DateTime.now;
+
+  /// Minutes east of UTC, so the server's "today" is the user's today.
+  String get _tz => 'tz_offset_minutes=${clock().timeZoneOffset.inMinutes}';
 
   /// Total quests completed (the counter on the Quest screen).
   int get completedCount => _completedCount;
@@ -134,6 +146,7 @@ class AppState extends ChangeNotifier {
       _activeQuestId = null;
       _journals = {};
       _rewards = null;
+      _streak = null;
     }
   }
 
@@ -154,6 +167,8 @@ class AppState extends ChangeNotifier {
     _activeQuestId = (m['active_quest'] as num?)?.toInt();
     final rewards = await _cache.read(_key('rewards'));
     _rewards = rewards == null ? null : Rewards.fromJson(jsonDecode(rewards) as Map<String, dynamic>);
+    final streak = await _cache.read(_key('streak'));
+    _streak = streak == null ? null : StreakInfo.fromJson(jsonDecode(streak) as Map<String, dynamic>);
     final journal = await _cache.read(_key('journal'));
     _journals = {};
     if (journal != null) {
@@ -176,6 +191,7 @@ class AppState extends ChangeNotifier {
       'meta:$id': jsonEncode({'completed': _completedCount, 'active_quest': _activeQuestId}),
       'journal:$id': jsonEncode([for (final list in _journals.values) for (final e in list) e.toJson()]),
       if (_rewards != null) 'rewards:$id': jsonEncode(_rewards!.toJson()),
+      if (_streak != null) 'streak:$id': jsonEncode(_streak!.toJson()),
     };
     for (final entry in values.entries) {
       if (_session?.token != session.token) return; // logged out meanwhile - don't write it back
@@ -246,6 +262,7 @@ class AppState extends ChangeNotifier {
     _activeQuestId = null;
     _journals = {};
     _rewards = null;
+    _streak = null;
     _photoCache.clear();
     _sessionExpired = false;
     _lastSyncError = null;
@@ -283,10 +300,19 @@ class AppState extends ChangeNotifier {
 
   /// Rate a quest: shown right away, sent now or when back online.
   Future<void> sendFeedback(int questId, QuestFeedback feedback) async {
+    final now = clock();
     _outbox.removeWhere((op) => op['type'] == 'feedback' && op['quest_id'] == questId);
-    _outbox.add({'type': 'feedback', 'quest_id': questId, 'body': feedback.toJson()});
+    _outbox.add({
+      'type': 'feedback',
+      'quest_id': questId,
+      // completed_at: when it really happened, even if this syncs hours later (streak day).
+      'body': {...feedback.toJson(), if (feedback.completed) 'completed_at': now.toUtc().toIso8601String()},
+    });
     final before = _quests.where((q) => q.id == questId);
     final wasCompleted = before.isNotEmpty && before.first.status == QuestStatus.completed;
+    if (feedback.completed && !wasCompleted) {
+      _streak = streak.withCompletion(now); // the flame lights up right away, even offline
+    }
     if (feedback.completed && !wasCompleted) _completedCount++;
     if (!feedback.completed && wasCompleted && _completedCount > 0) _completedCount--;
     // A completed quest leaves the Quest screen (it's in History now).
@@ -294,7 +320,7 @@ class AppState extends ChangeNotifier {
     _quests = [for (final q in _quests) q.id == questId ? q.withFeedback(feedback, pending: true) : q];
     await _saveCache();
     notifyListeners();
-    unawaited(sync(refresh: false));
+    unawaited(sync(refresh: false).then((_) => loadStreak()));
   }
 
   // ---------------------------------------------------------------------------
@@ -392,7 +418,7 @@ class AppState extends ChangeNotifier {
     final session = _session;
     if (session == null) return;
     try {
-      final json = await _call(() => api.get('/users/${session.account.id}/rewards'));
+      final json = await _call(() => api.get('/users/${session.account.id}/rewards?$_tz'));
       if (_session?.token != session.token) return;
       _rewards = Rewards.fromJson(json as Map<String, dynamic>);
       await _saveCache();
@@ -402,6 +428,40 @@ class AppState extends ChangeNotifier {
     } on ApiException {
       // keep the cached copy
     }
+  }
+
+  /// Refresh the streak from the server (after queued changes are sent, so
+  /// offline completions count). Offline / old server: keeps the local copy.
+  Future<void> loadStreak() async {
+    final session = _session;
+    if (session == null) return;
+    if (_outbox.any((op) => op['type'] == 'feedback')) return; // server doesn't know yet - keep ours
+    try {
+      final json = await _call(() => api.get('/users/${session.account.id}/streak?$_tz'));
+      if (_session?.token != session.token) return;
+      _streak = StreakInfo.fromJson(json as Map<String, dynamic>);
+      await _saveCache();
+      notifyListeners();
+    } on OfflineException {
+      // keep the local copy
+    } on ApiException {
+      // keep the local copy
+    }
+  }
+
+  /// Spend points on a streak freeze (needs a connection). Throws
+  /// [ApiException] (409 = not enough points / already holding the max) or
+  /// [OfflineException].
+  Future<void> buyStreakFreeze() async {
+    await sync(refresh: false); // points from quests rated offline count too
+    final session = _session;
+    if (session == null) return;
+    final json = await _call(() => api.post('/users/${session.account.id}/streak/freeze?$_tz'));
+    if (_session?.token != session.token) return;
+    _streak = StreakInfo.fromJson(json as Map<String, dynamic>);
+    await _saveCache();
+    notifyListeners();
+    unawaited(loadRewards()); // spendable points changed
   }
 
   /// A photo's bytes: from the device if we have them, else downloaded once.
@@ -488,7 +548,10 @@ class AppState extends ChangeNotifier {
         if (op['type'] == 'feedback') _markSynced(op['quest_id'] as int);
         await _saveCache();
       }
-      if (refresh && stillCurrent()) await _refresh(session);
+      if (refresh && stillCurrent()) {
+        await _refresh(session);
+        if (stillCurrent()) await loadStreak();
+      }
       if (stillCurrent()) _lastSyncError = dropped;
     } on OfflineException {
       // Stay queued; try again later.

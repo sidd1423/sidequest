@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import auth, db, history, journal, library, retrieval, rewards, taste as taste_mod
+from . import auth, db, history, journal, library, retrieval, rewards, streak, taste as taste_mod
 from .llm import GemmaClient, LLMClient, LLMError
 from .quest_generator import generate_quest
 from .schemas import (
@@ -37,6 +37,7 @@ async def lifespan(_: FastAPI):
     db.init_db()
     auth.init_auth()
     journal.init_journal()
+    streak.init_streaks()
     if not os.getenv("GEMMA_API_KEY") and "googleapis" in os.getenv(
         "GEMMA_BASE_URL", "https://generativelanguage.googleapis.com"
     ):
@@ -289,7 +290,38 @@ def delete_log(client_id: str, user_id: str = UserId) -> None:
     journal.delete(user_id, client_id)  # already gone is fine (offline retries)
 
 
+# The app sends its UTC offset (minutes east of UTC, e.g. -240 for Toronto in
+# summer) so "today" and streak days follow the user's own midnight.
+TzOffset = Query(0, ge=-streak.MAX_TZ_OFFSET, le=streak.MAX_TZ_OFFSET)
+
+
 @app.get("/users/{user_id}/rewards", response_model=rewards.Rewards)
-def read_rewards(user_id: str = UserId) -> rewards.Rewards:
+def read_rewards(user_id: str = UserId, tz_offset_minutes: int = TzOffset) -> rewards.Rewards:
     """Points, level, streaks and badges (see backend/rewards.py for the rules)."""
-    return rewards.compute(user_id)
+    return rewards.compute(user_id, tz_offset_minutes=tz_offset_minutes)
+
+
+# ---------------------------------------------------------------------------
+# Daily streak (see backend/streak.py for the rules)
+# ---------------------------------------------------------------------------
+
+def _streak(user_id: str, tz_offset_minutes: int) -> streak.Streak:
+    points = rewards.compute(user_id, tz_offset_minutes=tz_offset_minutes).points
+    return streak.compute(user_id, points, tz_offset_minutes)
+
+
+@app.get("/users/{user_id}/streak", response_model=streak.Streak)
+def read_streak(user_id: str = UserId, tz_offset_minutes: int = TzOffset) -> streak.Streak:
+    """Current/best streak, freezes, today's status and calendar days."""
+    return _streak(user_id, tz_offset_minutes)
+
+
+@app.post("/users/{user_id}/streak/freeze", response_model=streak.Streak, status_code=status.HTTP_201_CREATED)
+def buy_streak_freeze(user_id: str = UserId, tz_offset_minutes: int = TzOffset) -> streak.Streak:
+    """Spend points on a streak freeze. 409 if you can't (not enough points / already holding the max)."""
+    points = rewards.compute(user_id, tz_offset_minutes=tz_offset_minutes).points
+    try:
+        streak.buy_freeze(user_id, points, tz_offset_minutes)
+    except streak.FreezeError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return streak.compute(user_id, points, tz_offset_minutes)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any, Protocol
 
 import requests
@@ -26,8 +27,16 @@ DEFAULT_MAX_TOKENS = 8192
 log = logging.getLogger("sidequest.llm")
 
 
+DEFAULT_TIMEOUT = 180  # seconds to wait for an answer (Gemma 4 thinks before replying)
+CONNECT_TIMEOUT = 10
+
+
 class LLMError(RuntimeError):
     """The inference API failed or returned something unusable."""
+
+
+class LLMTimeout(LLMError):
+    """The inference API didn't answer in time (often just a busy server - worth retrying)."""
 
 
 class LLMClient(Protocol):
@@ -47,8 +56,11 @@ class GemmaClient:
         self.base_url = (base_url or os.getenv("GEMMA_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
         self.api_key = api_key if api_key is not None else os.getenv("GEMMA_API_KEY", "")
         self.model = model or os.getenv("GEMMA_MODEL") or DEFAULT_MODEL
-        self.timeout = timeout or float(os.getenv("GEMMA_TIMEOUT", "90"))
+        self.timeout = timeout or float(os.getenv("GEMMA_TIMEOUT") or DEFAULT_TIMEOUT)
         self.max_tokens = int(os.getenv("GEMMA_MAX_TOKENS", DEFAULT_MAX_TOKENS))
+        # Optional: "low" asks reasoning models to think less (faster). Dropped
+        # automatically if the server doesn't support it.
+        self.reasoning_effort = os.getenv("GEMMA_REASONING_EFFORT", "").strip() or None
 
     def complete(self, prompt: str, *, temperature: float = 0.9) -> str:
         # Gemma has no separate system role on some hosts (e.g. Google AI Studio),
@@ -62,12 +74,15 @@ class GemmaClient:
             "temperature": temperature,
             "max_tokens": self.max_tokens,
         }
-        try:
-            resp = requests.post(
-                f"{self.base_url}/chat/completions", json=payload, headers=headers, timeout=self.timeout
-            )
-        except requests.RequestException as exc:
-            raise LLMError(f"Can't reach the inference API at {self.base_url}: {exc}") from exc
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
+
+        resp = self._post(payload, headers)
+        if resp.status_code == 400 and "reasoning" in resp.text.lower() and "reasoning_effort" in payload:
+            log.warning("Server rejected reasoning_effort=%s - retrying without it", self.reasoning_effort)
+            payload.pop("reasoning_effort")
+            self.reasoning_effort = None
+            resp = self._post(payload, headers)
 
         if resp.status_code in (401, 403):
             raise LLMError("Inference API rejected the key - check GEMMA_API_KEY in .env")
@@ -87,6 +102,23 @@ class GemmaClient:
             hint = " (hit the token limit - raise GEMMA_MAX_TOKENS)" if finish == "length" else ""
             raise LLMError(f"Model returned an empty answer{hint}")
         return content
+
+    def _post(self, payload: dict, headers: dict) -> requests.Response:
+        started = time.monotonic()
+        try:
+            resp = requests.post(
+                f"{self.base_url}/chat/completions", json=payload, headers=headers,
+                timeout=(CONNECT_TIMEOUT, self.timeout),
+            )
+        except requests.Timeout as exc:
+            raise LLMTimeout(
+                f"Gemma didn't answer within {self.timeout:.0f}s - the inference API is probably busy. "
+                "Try again, or raise GEMMA_TIMEOUT in .env"
+            ) from exc
+        except requests.RequestException as exc:
+            raise LLMError(f"Can't reach the inference API at {self.base_url}: {exc}") from exc
+        log.info("inference API answered in %.1fs (HTTP %s)", time.monotonic() - started, resp.status_code)
+        return resp
 
 
 def _text(content: Any) -> str:

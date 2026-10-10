@@ -8,15 +8,19 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import time
 from typing import Any, Sequence
 
 from pydantic import ValidationError
 
-from .llm import GemmaClient, LLMClient, LLMError
+from .llm import GemmaClient, LLMClient, LLMError, LLMTimeout
 from .schemas import MIN_QUEST_MINUTES, FeedbackEntry, PastQuest, PreferencesIn, Quest, QuestExample
 
 MAX_ATTEMPTS = 3
+MAX_TIMEOUT_RETRIES = 1     # a timeout is usually a busy server - retry once
+DEFAULT_TIME_BUDGET = 300   # seconds for the whole generation, all attempts included
 
 log = logging.getLogger("sidequest.quests")
 
@@ -259,15 +263,30 @@ def generate_quest(
     recent_quests = list(recent_quests or [])
     prompt = build_prompt(profile, retrieved_examples, feedback_history, recent_quests)
 
+    budget = float(os.getenv("GEMMA_TIME_BUDGET") or DEFAULT_TIME_BUDGET)
+    started = time.monotonic()
     last_error = ""
-    for _ in range(MAX_ATTEMPTS):
+    timeouts = 0
+    attempts = 0
+    while attempts < MAX_ATTEMPTS:
+        if attempts and time.monotonic() - started > budget:
+            log.warning("Stopping after %.0fs (GEMMA_TIME_BUDGET=%.0f)", time.monotonic() - started, budget)
+            break
         attempt_prompt = prompt
         if last_error:
             attempt_prompt += (
                 f"\n\nYour previous answer was rejected: {last_error}. "
                 "Return a corrected JSON object only."
             )
-        raw = llm.complete(attempt_prompt)
+        try:
+            raw = llm.complete(attempt_prompt)
+        except LLMTimeout:
+            timeouts += 1
+            if timeouts > MAX_TIMEOUT_RETRIES or time.monotonic() - started > budget:
+                raise
+            log.warning("Inference API timed out - retrying once")
+            continue  # a timeout doesn't use up one of the answer attempts
+        attempts += 1
         try:
             quest = parse_quest(raw)
         except (ValueError, ValidationError) as exc:
@@ -281,6 +300,6 @@ def generate_quest(
         return quest
 
     raise LLMError(
-        f"Model didn't return a valid quest after {MAX_ATTEMPTS} attempts ({last_error}). "
+        f"Model didn't return a valid quest after {attempts} attempt(s) ({last_error}). "
         "The backend terminal shows what the model sent."
     )

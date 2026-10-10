@@ -409,7 +409,7 @@ else:
 
     st.caption("Uses your **saved** preferences - save the form first if you changed anything.")
     if st.button("✨ Generate sidequest", type="primary", use_container_width=True):
-        with st.spinner("Asking Gemma for a sidequest…"):
+        with st.spinner("Asking Gemma for a sidequest… this usually takes 10-60 seconds"):
             try:
                 quests.insert(0, api_client.generate_quest(user_id))
             except BackendError as e:

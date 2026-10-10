@@ -279,3 +279,94 @@ def test_client_sends_large_token_budget(monkeypatch):
     monkeypatch.setattr("backend.llm.requests.post", fake_post)
     GemmaClient(base_url="https://x.test", api_key="k").complete("p")
     assert seen["max_tokens"] >= 4096
+
+
+# ---------------------------------------------------------------------------
+# Timeouts
+# ---------------------------------------------------------------------------
+
+from backend.llm import LLMTimeout  # noqa: E402
+
+
+class FlakyLLM(FakeLLM):
+    """Raises LLMTimeout for the first `n` calls, then behaves like FakeLLM."""
+
+    def __init__(self, n, *responses):
+        super().__init__(*responses)
+        self.timeouts_left = n
+
+    def complete(self, prompt, *, temperature=0.9):
+        if self.timeouts_left:
+            self.timeouts_left -= 1
+            self.prompts.append(prompt)
+            raise LLMTimeout("Gemma didn't answer within 180s")
+        return super().complete(prompt, temperature=temperature)
+
+
+def test_retries_once_after_timeout():
+    llm = FlakyLLM(1, json.dumps(QUEST))
+    assert generate_quest(PROFILE, llm=llm).title == QUEST["title"]
+    assert len(llm.prompts) == 2
+
+
+def test_timeout_does_not_use_up_answer_attempts():
+    llm = FlakyLLM(1, "not json", "still not json", json.dumps(QUEST))
+    assert generate_quest(PROFILE, llm=llm).title == QUEST["title"]
+
+
+def test_gives_up_after_two_timeouts():
+    with pytest.raises(LLMTimeout):
+        generate_quest(PROFILE, llm=FlakyLLM(2, json.dumps(QUEST)))
+
+
+def test_time_budget_stops_retries(monkeypatch):
+    monkeypatch.setenv("GEMMA_TIME_BUDGET", "0")
+    llm = FakeLLM("nope", "nope", "nope")
+    with pytest.raises(LLMError, match="1 attempt"):
+        generate_quest(PROFILE, llm=llm)
+    assert len(llm.prompts) == 1
+
+
+def test_client_maps_timeout_and_splits_timeouts(monkeypatch):
+    import requests
+
+    seen = {}
+
+    def slow_post(url, json, headers, timeout):
+        seen["timeout"] = timeout
+        raise requests.ReadTimeout("read timed out")
+
+    monkeypatch.setattr("backend.llm.requests.post", slow_post)
+    with pytest.raises(LLMTimeout, match="GEMMA_TIMEOUT"):
+        GemmaClient(base_url="https://x.test", api_key="k").complete("p")
+    assert seen["timeout"] == (10, 180)
+
+
+def test_reasoning_effort_is_optional_and_dropped_if_unsupported(monkeypatch):
+    bodies = []
+
+    def fake_post(url, json, headers, timeout):
+        bodies.append(dict(json))
+        if "reasoning_effort" in json:
+            return FakeResp(400, {"error": {"message": "Unknown field reasoning_effort"}})
+        return FakeResp(200, {"choices": [{"message": {"content": "ok"}}]})
+
+    monkeypatch.setattr("backend.llm.requests.post", fake_post)
+    assert GemmaClient(base_url="https://x.test", api_key="k").complete("p") == "ok"
+    assert "reasoning_effort" not in bodies[-1] and len(bodies) == 1
+
+    monkeypatch.setenv("GEMMA_REASONING_EFFORT", "low")
+    client = GemmaClient(base_url="https://x.test", api_key="k")
+    assert client.complete("p") == "ok"
+    assert bodies[-2]["reasoning_effort"] == "low" and "reasoning_effort" not in bodies[-1]
+    assert client.reasoning_effort is None  # not sent again
+
+
+def test_api_reports_timeout_as_502(api):
+    client, _ = api
+    from backend.main import app, get_llm
+
+    app.dependency_overrides[get_llm] = lambda: FlakyLLM(5)
+    client.put("/users/gowtham/preferences", json=VALID)
+    r = client.post("/users/gowtham/quests")
+    assert r.status_code == 502 and "didn't answer" in r.json()["detail"]

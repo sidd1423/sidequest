@@ -69,7 +69,7 @@ def save_preferences(user_id: str, prefs: PreferencesIn) -> dict:
 # Quests
 # ---------------------------------------------------------------------------
 
-GENERATE_TIMEOUT = 150  # the model may retry up to 3 times
+GENERATE_TIMEOUT = 360  # backend gives Gemma up to GEMMA_TIME_BUDGET (300s) incl. retries
 
 
 def generate_quest(user_id: str) -> dict:

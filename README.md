@@ -1,6 +1,9 @@
 # sidequest
 
-Suggests "sidequests" that fit a user's interests, time, energy and constraints.
+Sidequests are quick **5-30 minute things to do outside, right now** - small,
+low-friction nudges to get people out of the house more often. The app tailors
+each one to the user's interests, how much time they have, their energy,
+accessibility needs, what's around them and the weather they want to avoid.
 
 ## Architecture
 
@@ -13,8 +16,9 @@ Streamlit UI (app.py)  ──HTTP/JSON──▶  FastAPI backend (backend/)  ─
         └──────── shared Pydantic schema (backend/schemas.py) ────────┘
 ```
 
-- **Frontend** `app.py`: preference form (interests, available time, difficulty,
-  energy, accessibility, environment, weather). Validates input with the
+- **Frontend** `app.py`: preference form (interests, minutes available right
+  now (5-30), difficulty, energy, accessibility, surroundings / how far to go,
+  crowds, group, weather). Validates input with the
   shared schema, then sends it to the backend via `frontend/api_client.py`.
 - **Backend** `backend/main.py`: REST API that validates and stores preferences.
 - **Storage** `backend/db.py`: preferences, quests and feedback in SQLite. Swap

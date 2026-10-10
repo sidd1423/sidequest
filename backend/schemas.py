@@ -1,8 +1,13 @@
-"""Shared data model for user preferences.
+"""Shared data model for user preferences and quests.
 
 Used by both the FastAPI backend (request/response validation) and the
 Streamlit frontend (option lists + client-side validation), so the two can
 never drift apart.
+
+Sidequests are short (5-30 minute) things to do OUTSIDE, RIGHT NOW - the
+point is to get people out of the house more often. So preferences describe
+how much time the user has right now and what's around them, not when or
+whether to go outside.
 """
 
 from __future__ import annotations
@@ -31,13 +36,6 @@ class Interest(str, Enum):
     WELLNESS = "wellness"
 
 
-class TimeOfDay(str, Enum):
-    MORNING = "morning"
-    AFTERNOON = "afternoon"
-    EVENING = "evening"
-    NIGHT = "night"
-
-
 class Difficulty(str, Enum):
     EASY = "easy"
     MODERATE = "moderate"
@@ -58,6 +56,8 @@ class AccessibilityNeed(str, Enum):
 
 
 class Setting(str, Enum):
+    """Kept only so older stored quests still load - every new quest is outdoors."""
+
     INDOOR = "indoor"
     OUTDOOR = "outdoor"
     EITHER = "either"
@@ -98,25 +98,38 @@ class WeatherCondition(str, Enum):
 # Sub-models
 # ---------------------------------------------------------------------------
 
+MIN_QUEST_MINUTES = 5
+MAX_QUEST_MINUTES = 30
+MAX_TRAVEL_KM = 5.0
+
+
 class Availability(BaseModel):
-    duration_minutes: int = Field(60, ge=15, le=720, description="How long the user has")
-    preferred_times: list[TimeOfDay] = Field(default_factory=list)
+    model_config = ConfigDict(extra="forbid")
+
+    duration_minutes: int = Field(
+        15, ge=MIN_QUEST_MINUTES, le=MAX_QUEST_MINUTES, description="Minutes the user has right now"
+    )
 
 
 class Accessibility(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     needs: list[AccessibilityNeed] = Field(default_factory=list)
     notes: str = Field("", max_length=500)
 
 
 class Environment(BaseModel):
-    setting: Setting = Setting.EITHER
-    surroundings: list[Surroundings] = Field(default_factory=list)
+    model_config = ConfigDict(extra="forbid")
+
+    surroundings: list[Surroundings] = Field(default_factory=list, description="What's around the user now")
     crowd_tolerance: CrowdLevel = CrowdLevel.MODERATE
     group_size: GroupSize = GroupSize.SOLO
-    max_travel_km: int = Field(10, ge=0, le=500)
+    max_travel_km: float = Field(1.0, ge=0, le=MAX_TRAVEL_KM, description="How far from where they are now")
 
 
 class WeatherConstraints(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     avoid: list[WeatherCondition] = Field(default_factory=list)
     min_temp_c: int = Field(5, ge=-40, le=50)
     max_temp_c: int = Field(30, ge=-40, le=50)
@@ -162,6 +175,24 @@ class PreferencesIn(BaseModel):
             raise ValueError("Pick at least one interest")
         return self
 
+    @staticmethod
+    def upgrade_stored(data: dict) -> dict:
+        """Adapt preferences saved by older versions of the app (which had
+        indoor/outdoor, time-of-day and hours-long durations) to the current
+        quick-outdoor-quest model, so they still load."""
+        data = dict(data)
+        avail = dict(data.get("availability") or {})
+        avail.pop("preferred_times", None)
+        if "duration_minutes" in avail:
+            avail["duration_minutes"] = max(MIN_QUEST_MINUTES, min(MAX_QUEST_MINUTES, int(avail["duration_minutes"])))
+        data["availability"] = avail
+        env = dict(data.get("environment") or {})
+        env.pop("setting", None)
+        if "max_travel_km" in env:
+            env["max_travel_km"] = max(0.0, min(MAX_TRAVEL_KM, float(env["max_travel_km"])))
+        data["environment"] = env
+        return data
+
 
 class PreferencesOut(PreferencesIn):
     """What the backend returns: the stored preferences plus metadata."""
@@ -190,13 +221,15 @@ class Quest(BaseModel):
     title: str = Field(..., min_length=3, max_length=120)
     summary: str = Field(..., min_length=10, max_length=600)
     steps: list[str] = Field(..., min_length=1, max_length=10)
-    estimated_minutes: int = Field(..., ge=5, le=720)
+    # Wide bounds so older stored quests still load; generate_quest enforces
+    # MIN_QUEST_MINUTES..the user's available minutes for new quests.
+    estimated_minutes: int = Field(..., ge=1, le=720)
     difficulty: Difficulty
     energy_required: int = Field(..., ge=1, le=5)
-    setting: Setting
+    setting: Setting = Setting.OUTDOOR
     tags: list[str] = Field(default_factory=list, max_length=8)
     accessibility_notes: str = Field("", max_length=400)
-    weather_backup: str = Field("", max_length=400, description="Plan B if the weather turns")
+    weather_backup: str = Field("", max_length=400, description="Outdoor plan B if the weather turns")
     why_it_fits: str = Field("", max_length=400)
 
     @field_validator("tags")

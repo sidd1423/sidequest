@@ -71,7 +71,7 @@ def _row_to_model(row: sqlite3.Row) -> PreferencesOut:
         user_id=row["user_id"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
-        **json.loads(row["data"]),
+        **PreferencesIn.upgrade_stored(json.loads(row["data"])),
     )
 
 

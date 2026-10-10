@@ -1,5 +1,7 @@
 """Local quest library: SQLite + offline embeddings.
 
+Sidequests are quick (5-30 min) outdoor things to do right now.
+
 One `quests` table holds:
   * the seeded example quests (source='seed', time_logged_minutes = 0), and
   * every sidequest the app generates (source='generated'), with the user's
@@ -16,6 +18,7 @@ Create / re-seed with:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -74,6 +77,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS quests_seed_text_uq ON quests (quest_text) WHE
 CREATE UNIQUE INDEX IF NOT EXISTS quests_app_quest_uq ON quests (app_quest_id) WHERE app_quest_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS quests_category_idx ON quests (category);
 CREATE INDEX IF NOT EXISTS quests_user_idx ON quests (user_id);
+
+CREATE TABLE IF NOT EXISTS library_meta (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);
 """
 
 NEW_COLUMNS = [
@@ -137,19 +145,37 @@ def migrate(conn: sqlite3.Connection) -> bool:
     return True
 
 
-def init_library(path: Path | None = None, embedder: Embedder | None = None) -> Path:
-    """Make sure the library exists, has the current schema, and is seeded."""
+def seed_fingerprint(seed_file: Path = SEED_FILE) -> str:
+    return hashlib.sha256(Path(seed_file).read_bytes()).hexdigest()[:16]
+
+
+def _stored_fingerprint(conn: sqlite3.Connection) -> str | None:
+    try:
+        row = conn.execute("SELECT value FROM library_meta WHERE key = 'seed_fingerprint'").fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return row[0] if row else None
+
+
+def init_library(path: Path | None = None, embedder: Embedder | None = None,
+                 seed_file: Path = SEED_FILE) -> Path:
+    """Make sure the library exists, has the current schema, and holds the
+    current seed quests (re-seeding when tiger/seed_quests.json changes)."""
     path = Path(path or library_path())
     if not path.exists():
-        seed(path, embedder=embedder)
+        seed(path, seed_file=seed_file, embedder=embedder)
         log.info("Created and seeded quest library at %s", path)
         return path
     conn = _connect(path)
     try:
         migrate(conn)
         conn.executescript(SCHEMA)
+        stale = _stored_fingerprint(conn) != seed_fingerprint(seed_file)
     finally:
         conn.close()
+    if stale:
+        n = seed(path, seed_file=seed_file, embedder=embedder)
+        log.info("Seed quests changed - library re-seeded with %d quests", n)
     return path
 
 
@@ -186,6 +212,17 @@ def seed(path: Path | None = None, seed_file: Path = SEED_FILE, embedder: Embedd
                  json.dumps(r["tags"]), _pack(v), getattr(embedder, "model", ""))
                 for r, v in zip(rows, vectors)
             ],
+        )
+        # Drop seed quests that are no longer in the seed file (generated quests are kept).
+        texts = [r["quest_text"] for r in rows]
+        conn.execute(
+            f"DELETE FROM quests WHERE source = 'seed' AND quest_text NOT IN ({','.join('?' * len(texts))})",
+            texts,
+        )
+        conn.execute(
+            "INSERT INTO library_meta (key, value) VALUES ('seed_fingerprint', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (seed_fingerprint(seed_file),),
         )
         conn.commit()
         return conn.execute("SELECT count(*) FROM quests WHERE source = 'seed'").fetchone()[0]

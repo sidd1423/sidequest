@@ -14,10 +14,9 @@ QUEST = {
     "title": "Waterfront Morning Light Walk",
     "summary": "Stroll the lakeshore at sunrise and photograph three reflections of the city.",
     "steps": ["Head to the waterfront trail", "Find three reflections", "Pick your favourite shot"],
-    "estimated_minutes": 90,
+    "estimated_minutes": 20,
     "difficulty": "easy",
     "energy_required": 2,
-    "setting": "outdoor",
     "tags": ["Nature", "photography", "nature"],
     "accessibility_notes": "Paved, step-free path with benches.",
     "weather_backup": "Shoot reflections in a glass atrium downtown instead.",
@@ -69,9 +68,11 @@ def test_examples_and_feedback_reach_prompt():
 
 def test_hard_constraints_in_prompt():
     prompt = build_prompt(PROFILE)
-    assert "at most 120 minutes" in prompt
-    assert "no more than 25 km" in prompt
+    assert "between 5 and 25 minutes" in prompt
+    assert "within 1.5 km" in prompt
     assert "between 8 and 28" in prompt
+    assert "OUTSIDE" in prompt and "RIGHT NOW" in prompt
+    assert "indoor | outdoor" not in prompt and "time of day" not in prompt.lower()
 
 
 def test_parses_fenced_json():
@@ -85,16 +86,27 @@ def test_retries_bad_json_then_succeeds():
 
 
 def test_retries_when_quest_too_long():
-    too_long = {**QUEST, "estimated_minutes": 300}
+    too_long = {**QUEST, "estimated_minutes": 45}
     llm = FakeLLM(json.dumps(too_long), json.dumps(QUEST))
-    assert generate_quest(PROFILE, llm=llm).estimated_minutes == 90
+    assert generate_quest(PROFILE, llm=llm).estimated_minutes == 20
     assert "exceeds" in llm.prompts[1]
 
 
-def test_retries_when_setting_wrong():
+def test_retries_when_quest_is_indoors():
     indoor = {**QUEST, "setting": "indoor"}
     llm = FakeLLM(json.dumps(indoor), json.dumps(QUEST))
     assert generate_quest(PROFILE, llm=llm).setting.value == "outdoor"
+    assert "outdoors" in llm.prompts[1]
+
+
+def test_retries_when_quest_too_short():
+    llm = FakeLLM(json.dumps({**QUEST, "estimated_minutes": 2}), json.dumps(QUEST))
+    assert generate_quest(PROFILE, llm=llm).estimated_minutes == 20
+
+
+def test_quest_without_setting_defaults_outdoor():
+    data = {k: v for k, v in QUEST.items() if k != "setting"}
+    assert Quest.model_validate(data).setting.value == "outdoor"
 
 
 def test_gives_up_after_three_attempts():

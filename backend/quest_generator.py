@@ -1,4 +1,8 @@
-"""Turn a user's preferences (plus optional history) into a sidequest using Gemma."""
+"""Turn a user's preferences (plus optional history) into a quick outdoor sidequest using Gemma.
+
+A sidequest is a 5-30 minute thing to do outside, starting right now from
+wherever the user is - small nudges to get people outdoors more often.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +14,7 @@ from typing import Any, Sequence
 from pydantic import ValidationError
 
 from .llm import GemmaClient, LLMClient, LLMError
-from .schemas import FeedbackEntry, PreferencesIn, Quest, QuestExample
+from .schemas import MIN_QUEST_MINUTES, FeedbackEntry, PreferencesIn, Quest, QuestExample
 
 MAX_ATTEMPTS = 3
 
@@ -20,13 +24,12 @@ QUEST_JSON_SHAPE = """{
   "title": "short, catchy quest name",
   "summary": "2-3 sentences describing the quest",
   "steps": ["step 1", "step 2", "..."],
-  "estimated_minutes": 90,
+  "estimated_minutes": 15,
   "difficulty": "easy | moderate | challenging | extreme",
   "energy_required": 3,
-  "setting": "indoor | outdoor | either",
   "tags": ["nature", "photography"],
   "accessibility_notes": "how this quest accommodates the user's needs (or empty)",
-  "weather_backup": "what to do instead if the weather turns bad",
+  "weather_backup": "a quick OUTDOOR alternative if the weather turns (e.g. under a covered spot)",
   "why_it_fits": "one sentence on why this matches the user"
 }"""
 
@@ -63,21 +66,29 @@ def build_prompt(
     retrieved_examples: Sequence[QuestExample] | None = None,
     feedback_history: Sequence[FeedbackEntry] | None = None,
 ) -> str:
+    minutes = profile.availability.duration_minutes
     parts = [
-        "You are Sidequest, an assistant that designs one small, real-world adventure "
-        "(a 'sidequest') tailored to a specific person.",
+        "You are Sidequest. You design ONE small, real-world adventure (a 'sidequest') that gets this "
+        "person outside right now. Sidequests are quick, outdoor, start-immediately tasks - the point is "
+        "to get people out of the house more often in a fun, low-friction way.",
         "",
         "## User profile",
         _profile_block(profile),
         "",
         "## Hard constraints - the quest MUST respect all of these",
-        f"- Takes at most {profile.availability.duration_minutes} minutes in total, including travel.",
-        f"- Travel no more than {profile.environment.max_travel_km} km.",
+        "- Happens OUTSIDE (streets, parks, yards, waterfronts, trails, plazas) - never indoors.",
+        "- Can start RIGHT NOW from wherever the user is: no booking, tickets, opening hours, special "
+        "gear or planning ahead.",
+        f"- Takes between {MIN_QUEST_MINUTES} and {minutes} minutes in total, including getting there "
+        "and back.",
+        f"- Stays within {profile.environment.max_travel_km:g} km of where they are now (walking or "
+        "rolling distance).",
         f"- Difficulty around '{profile.difficulty.value}' and energy demand about {profile.energy_level}/5.",
         "- Fully compatible with every listed accessibility need.",
-        f"- Works between {profile.weather.min_temp_c} and {profile.weather.max_temp_c} °C, "
-        "and include a weather backup plan for the conditions the user wants to avoid.",
-        "- Specific and doable today: concrete actions, not vague advice. No purchases over a small amount.",
+        f"- Comfortable between {profile.weather.min_temp_c} and {profile.weather.max_temp_c} °C; include a "
+        "quick outdoor plan B for the weather conditions the user wants to avoid.",
+        "- Free or nearly free. Concrete, specific actions - not vague advice.",
+        "- Suit their surroundings, crowd tolerance and group size.",
     ]
 
     if retrieved_examples:
@@ -96,7 +107,8 @@ def build_prompt(
         ]
 
     if not feedback_history:
-        parts += ["", "This is the user's first quest - pick something welcoming that clearly matches their interests."]
+        parts += ["", "This is the user's first quest - pick something easy to say yes to that clearly matches "
+                  "their interests."]
 
     parts += [
         "",
@@ -149,16 +161,13 @@ def parse_quest(raw: str) -> Quest:
 
 def _violations(quest: Quest, profile: PreferencesIn) -> list[str]:
     problems = []
-    if quest.estimated_minutes > profile.availability.duration_minutes:
-        problems.append(
-            f"estimated_minutes ({quest.estimated_minutes}) exceeds the user's "
-            f"{profile.availability.duration_minutes} available minutes"
-        )
-    if profile.environment.setting.value != "either" and quest.setting.value not in (
-        profile.environment.setting.value,
-        "either",
-    ):
-        problems.append(f"setting must be '{profile.environment.setting.value}'")
+    available = profile.availability.duration_minutes
+    if quest.estimated_minutes > available:
+        problems.append(f"estimated_minutes ({quest.estimated_minutes}) exceeds the user's {available} available minutes")
+    if quest.estimated_minutes < MIN_QUEST_MINUTES:
+        problems.append(f"estimated_minutes must be at least {MIN_QUEST_MINUTES}")
+    if quest.setting.value == "indoor":
+        problems.append("the quest must take place outdoors")
     return problems
 
 

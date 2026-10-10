@@ -66,14 +66,15 @@ def build_query_text(profile: PreferencesIn, feedback: Sequence[FeedbackEntry] |
     env = profile.environment
     parts = [
         f"{', '.join(interests)} sidequest.",
-        f"An activity about {' and '.join(interests)}.",
-        f"Setting: {env.setting.value}" + (f", {', '.join(s.value for s in env.surroundings)}" if env.surroundings else "") + ".",
+        f"A quick outdoor activity about {' and '.join(interests)}, right now.",
         f"Difficulty {profile.difficulty.value}, energy {profile.energy_level} of 5.",
     ]
+    if env.surroundings:
+        parts.append(f"Outside in a {', '.join(s.value for s in env.surroundings)} area.")
     if env.group_size.value != "solo":
         parts.append(f"With {env.group_size.value.replace('_', ' ')}, social.")
-    if profile.availability.preferred_times:
-        parts.append(f"Time of day: {', '.join(t.value for t in profile.availability.preferred_times)}.")
+    if env.crowd_tolerance.value == "quiet":
+        parts.append("Quiet, calm.")
     if profile.accessibility.needs:
         parts.append(f"Accessible: {', '.join(n.value.replace('_', ' ') for n in profile.accessibility.needs)}.")
     if feedback:

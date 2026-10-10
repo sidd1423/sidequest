@@ -1,4 +1,4 @@
-"""Sidequest - user preference interface (Streamlit frontend).
+"""Sidequest - quick outdoor quests to get you outside (Streamlit frontend).
 
 Run the backend first:   uvicorn backend.main:app --reload
 Then this app:           streamlit run app.py
@@ -14,6 +14,9 @@ from dotenv import load_dotenv
 from pydantic import ValidationError
 
 from backend.schemas import (
+    MAX_QUEST_MINUTES,
+    MAX_TRAVEL_KM,
+    MIN_QUEST_MINUTES,
     USER_ID_PATTERN,
     AccessibilityNeed,
     CrowdLevel,
@@ -21,9 +24,7 @@ from backend.schemas import (
     GroupSize,
     Interest,
     PreferencesIn,
-    Setting,
     Surroundings,
-    TimeOfDay,
     WeatherCondition,
 )
 from frontend import api_client
@@ -36,7 +37,7 @@ st.set_page_config(page_title="Sidequest · Preferences", page_icon="🧭", layo
 ENERGY_LABELS = {1: "Very low", 2: "Low", 3: "Medium", 4: "High", 5: "Very high"}
 DIFFICULTY_HELP = {
     Difficulty.EASY: "Relaxed, no prep needed",
-    Difficulty.MODERATE: "Some effort or planning",
+    Difficulty.MODERATE: "A bit of effort",
     Difficulty.CHALLENGING: "Physically or mentally demanding",
     Difficulty.EXTREME: "Push your limits",
 }
@@ -68,11 +69,11 @@ def current_defaults() -> dict:
     return {
         "interests": [],
         "custom_interests": [],
-        "availability": {"duration_minutes": 60, "preferred_times": []},
+        "availability": {"duration_minutes": 15},
         "accessibility": {"needs": [], "notes": ""},
         "environment": {
-            "setting": "either", "surroundings": [], "crowd_tolerance": "moderate",
-            "group_size": "solo", "max_travel_km": 10,
+            "surroundings": [], "crowd_tolerance": "moderate",
+            "group_size": "solo", "max_travel_km": 1.0,
         },
         "weather": {"avoid": [], "min_temp_c": 5, "max_temp_c": 30},
         "difficulty": "moderate",
@@ -130,7 +131,10 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 
 st.title("🧭 Sidequest")
-st.write("Tell us what you're into and what fits your day. We'll use this to suggest sidequests that match.")
+st.write(
+    "Quick 5-30 minute quests to do **outside, right now** - small nudges to get you out of the house. "
+    "Tell us what you're into and how much time you've got."
+)
 
 d = current_defaults()
 v = ss.form_version
@@ -155,21 +159,13 @@ with st.form("preferences"):
     )
 
     # --- Time ------------------------------------------------------------
-    st.subheader("Available time")
+    st.subheader("Time right now")
     duration = st.slider(
-        "How much time do you have?",
-        min_value=15, max_value=720, step=15,
+        "How many minutes can you spend outside?",
+        min_value=MIN_QUEST_MINUTES, max_value=MAX_QUEST_MINUTES, step=5,
         value=d["availability"]["duration_minutes"],
         format="%d min",
         key=k("duration"),
-    )
-    preferred_times = st.pills(
-        "Preferred time of day",
-        options=list(TimeOfDay),
-        selection_mode="multi",
-        default=[TimeOfDay(t) for t in d["availability"]["preferred_times"]],
-        format_func=label,
-        key=k("times"),
     )
 
     # --- Difficulty & energy ---------------------------------------------
@@ -203,22 +199,30 @@ with st.form("preferences"):
         "Anything else we should know?",
         value=d["accessibility"]["notes"],
         max_chars=500,
-        placeholder="e.g. can't stand for more than 30 minutes",
+        placeholder="e.g. need a bench every few minutes",
         key=k("access_notes"),
     )
 
-    # --- Environment -----------------------------------------------------
-    st.subheader("Environment")
+    # --- Surroundings ----------------------------------------------------
+    st.subheader("Where you are")
     env = d["environment"]
+    surroundings = st.pills(
+        "What's around you?",
+        options=list(Surroundings),
+        selection_mode="multi",
+        default=[Surroundings(s) for s in env["surroundings"]],
+        format_func=label,
+        key=k("surroundings"),
+    )
+    travel = st.slider(
+        "How far are you happy to go from where you are? (km)",
+        min_value=0.0, max_value=MAX_TRAVEL_KM, step=0.5,
+        value=float(env["max_travel_km"]),
+        format="%.1f km",
+        key=k("travel"),
+    )
     c1, c2 = st.columns(2)
     with c1:
-        setting = st.segmented_control(
-            "Indoor or outdoor?",
-            options=list(Setting),
-            default=Setting(env["setting"]),
-            format_func=label,
-            key=k("setting"),
-        )
         crowd = st.select_slider(
             "Crowd tolerance",
             options=list(CrowdLevel),
@@ -234,20 +238,7 @@ with st.form("preferences"):
             format_func=label,
             key=k("group"),
         )
-        travel = st.number_input(
-            "Max travel distance (km)",
-            min_value=0, max_value=500, step=1,
-            value=env["max_travel_km"],
-            key=k("travel"),
-        )
-    surroundings = st.pills(
-        "Preferred surroundings",
-        options=list(Surroundings),
-        selection_mode="multi",
-        default=[Surroundings(s) for s in env["surroundings"]],
-        format_func=label,
-        key=k("surroundings"),
-    )
+
 
     # --- Weather ---------------------------------------------------------
     st.subheader("Weather constraints")
@@ -284,16 +275,15 @@ def save_form() -> None:
         prefs = PreferencesIn(
             interests=interests or [],
             custom_interests=[c for c in custom.split(",") if c.strip()],
-            availability={"duration_minutes": duration, "preferred_times": preferred_times or []},
+            availability={"duration_minutes": duration},
             difficulty=difficulty,
             energy_level=energy,
             accessibility={"needs": access_needs, "notes": access_notes.strip()},
             environment={
-                "setting": setting or Setting.EITHER,
                 "surroundings": surroundings or [],
                 "crowd_tolerance": crowd,
                 "group_size": group,
-                "max_travel_km": int(travel),
+                "max_travel_km": float(travel),
             },
             weather={"avoid": avoid or [], "min_temp_c": temp_range[0], "max_temp_c": temp_range[1]},
         )
@@ -330,11 +320,10 @@ def render_quest(record: dict) -> None:
     with st.container(border=True):
         st.subheader(q["title"])
         st.write(q["summary"])
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3 = st.columns(3)
         c1.metric("Time", f"{q['estimated_minutes']} min")
         c2.metric("Difficulty", label(q["difficulty"]))
         c3.metric("Energy", ENERGY_LABELS[q["energy_required"]])
-        c4.metric("Setting", label(q["setting"]))
 
         st.markdown("**Steps**")
         st.markdown("\n".join(f"{i}. {step}" for i, step in enumerate(q["steps"], 1)))
@@ -342,7 +331,7 @@ def render_quest(record: dict) -> None:
         if q.get("accessibility_notes"):
             st.markdown(f"♿ **Accessibility:** {q['accessibility_notes']}")
         if q.get("weather_backup"):
-            st.markdown(f"🌦️ **Weather backup:** {q['weather_backup']}")
+            st.markdown(f"🌦️ **If the weather turns:** {q['weather_backup']}")
         if q.get("why_it_fits"):
             st.caption(f"Why this fits you: {q['why_it_fits']}")
         if q.get("tags"):

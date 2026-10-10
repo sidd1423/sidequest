@@ -14,16 +14,15 @@ def client(tmp_path, monkeypatch):
 VALID = {
     "interests": ["nature", "photography"],
     "custom_interests": [" Birdwatching ", "birdwatching", ""],
-    "availability": {"duration_minutes": 120, "preferred_times": ["morning"]},
+    "availability": {"duration_minutes": 25},
     "difficulty": "easy",
     "energy_level": 2,
     "accessibility": {"needs": ["step_free"], "notes": "bring a stool"},
     "environment": {
-        "setting": "outdoor",
         "surroundings": ["waterfront"],
         "crowd_tolerance": "quiet",
         "group_size": "pair",
-        "max_travel_km": 25,
+        "max_travel_km": 1.5,
     },
     "weather": {"avoid": ["rain", "extreme_cold"], "min_temp_c": 8, "max_temp_c": 28},
 }
@@ -46,7 +45,7 @@ def test_save_and_load_roundtrip(client):
 
     loaded = client.get("/users/gowtham/preferences").json()
     assert loaded["weather"]["avoid"] == ["rain", "extreme_cold"]
-    assert loaded["environment"]["max_travel_km"] == 25
+    assert loaded["environment"]["max_travel_km"] == 1.5
 
 
 def test_update_keeps_created_at(client):
@@ -64,7 +63,11 @@ def test_update_keeps_created_at(client):
         {"energy_level": 9},
         {"difficulty": "impossible"},
         {"weather": {"avoid": [], "min_temp_c": 30, "max_temp_c": 10}},
-        {"availability": {"duration_minutes": 5}},
+        {"availability": {"duration_minutes": 45}},
+        {"availability": {"duration_minutes": 2}},
+        {"environment": {"max_travel_km": 20}},
+        {"availability": {"duration_minutes": 20, "preferred_times": ["morning"]}},
+        {"environment": {"setting": "indoor"}},
         {"unexpected_field": True},
     ],
 )
@@ -80,3 +83,26 @@ def test_delete(client):
     client.put("/users/gowtham/preferences", json=VALID)
     assert client.delete("/users/gowtham/preferences").status_code == 204
     assert client.get("/users/gowtham/preferences").status_code == 404
+
+
+def test_old_stored_preferences_still_load(client, tmp_path):
+    """Preferences saved before the quick-outdoor redesign (indoor/outdoor,
+    time of day, hours-long durations, long travel) are upgraded on read."""
+    import json
+    import os
+    import sqlite3
+
+    old = {**VALID,
+           "availability": {"duration_minutes": 180, "preferred_times": ["morning", "evening"]},
+           "environment": {**VALID["environment"], "setting": "indoor", "max_travel_km": 25}}
+    conn = sqlite3.connect(os.environ["DATABASE_PATH"])
+    conn.execute("INSERT INTO user_preferences VALUES (?, ?, ?, ?)",
+                 ("legacy", json.dumps(old), "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"))
+    conn.commit()
+    conn.close()
+
+    r = client.get("/users/legacy/preferences")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["availability"] == {"duration_minutes": 30}
+    assert "setting" not in body["environment"] and body["environment"]["max_travel_km"] == 5.0

@@ -44,7 +44,7 @@ def test_top3_matches_interests(lib):
         (["food", "social"], {"food", "social"}),
         (["music", "nightlife"], {"music", "nightlife"}),
     ]:
-        results = r.retrieve(prefs(interests=interests, availability={"duration_minutes": 180}))
+        results = r.retrieve(prefs(interests=interests, availability={"duration_minutes": 30}))
         assert len(results) == 3
         assert all(x.source == "local_library" for x in results)
         on_topic = [x for x in results if x.category in expect or expect & set(x.tags)]
@@ -52,8 +52,8 @@ def test_top3_matches_interests(lib):
 
 
 def test_prefers_quests_that_fit_time(lib):
-    results = LocalLibraryRetriever(lib).retrieve(prefs(interests=["wellness"], availability={"duration_minutes": 30}))
-    assert results[0].duration_minutes <= 30
+    results = LocalLibraryRetriever(lib).retrieve(prefs(interests=["fitness"], availability={"duration_minutes": 10}))
+    assert results[0].duration_minutes <= 10
 
 
 def test_custom_interest_birdwatching(lib):
@@ -120,22 +120,50 @@ def _rows(path, where="1=1"):
         conn.close()
 
 
-def test_migrates_old_library_keeping_rows(tmp_path):
+def test_migrate_keeps_old_rows(tmp_path):
     path = tmp_path / "lib.db"
     path.write_bytes(OLD_FORMAT.read_bytes())
     before = _rows(path)
     assert "time_logged_minutes" not in before[0]
 
-    library.init_library(path)
+    conn = sqlite3.connect(path)
+    assert library.migrate(conn) is True
+    assert library.migrate(conn) is False  # idempotent
+    conn.close()
     after = _rows(path)
     assert len(after) == len(before) == 30
     assert all(r["time_logged_minutes"] == 0 and r["source"] == "seed" for r in after)
     assert [r["quest_text"] for r in after] == [r["quest_text"] for r in before]
     assert all(r["embedding"] == b["embedding"] for r, b in zip(after, before))
 
-    library.init_library(path)  # idempotent
-    assert seed(path) == 30     # re-seeding still upserts, no duplicates
+
+def test_init_upgrades_old_library_to_current_seed_quests(tmp_path):
+    path = tmp_path / "lib.db"
+    path.write_bytes(OLD_FORMAT.read_bytes())
+    library.init_library(path)
+    seeds = _rows(path, "source = 'seed'")
+    expected = [q["quest_text"] for q in json.loads(library.SEED_FILE.read_text(encoding="utf-8"))]
+    assert sorted(r["quest_text"] for r in seeds) == sorted(expected)
+    assert all(5 <= r["duration_minutes"] <= 30 for r in seeds)
+    assert {r["time_logged_minutes"] for r in seeds} == {0}
+
+    library.init_library(path)  # unchanged seed file -> nothing to do
+    assert seed(path) == 30     # explicit re-seed still upserts, no duplicates
     assert len(_rows(path)) == 30
+
+
+def test_reseed_keeps_generated_quests(tmp_path):
+    path = tmp_path / "lib.db"
+    library.init_library(path)
+    library.add_generated(1, "u", Quest.model_validate(QUEST), path=path)
+    library.record_feedback(1, FeedbackIn(completed=True, rating=5, time_logged_minutes=18), path=path)
+
+    smaller = tmp_path / "seed.json"
+    smaller.write_text(json.dumps(json.loads(library.SEED_FILE.read_text(encoding="utf-8"))[:5]))
+    library.init_library(path, seed_file=smaller)  # seed file changed -> re-seed
+    assert len(_rows(path, "source = 'seed'")) == 5
+    [g] = _rows(path, "source = 'generated'")
+    assert (g["rating"], g["time_logged_minutes"]) == (5, 18)
 
 
 def test_init_creates_and_seeds_missing_library(tmp_path):

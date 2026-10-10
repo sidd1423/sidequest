@@ -87,6 +87,8 @@ def main(argv: list[str] | None = None) -> int:
                     (r["quest_text"], r["category"], r["duration_minutes"], r["difficulty"], r["tags"],
                      "[" + ",".join(f"{x:.7f}" for x in v) + "]"),
                 )
+        # Remove library quests that are no longer in the seed file
+        conn.execute(f"DELETE FROM {table} WHERE NOT (quest_text = ANY(%s))", ([r["quest_text"] for r in rows],))
         total = conn.execute(f"select count(*) from {table}").fetchone()[0]
         print(f"Done - {len(rows)} quests upserted, {total} rows in {table}.")
     return 0

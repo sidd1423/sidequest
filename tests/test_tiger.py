@@ -52,7 +52,7 @@ class BagOfWordsEmbedder:
         return out
 
 
-PROFILE = PreferencesIn.model_validate(VALID)  # nature + photography, 120 min, waterfront, easy
+PROFILE = PreferencesIn.model_validate(VALID)  # nature + photography, 25 min, waterfront, easy
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +61,7 @@ PROFILE = PreferencesIn.model_validate(VALID)  # nature + photography, 120 min, 
 
 def test_query_text_describes_user():
     q = build_query_text(PROFILE)
-    for word in ("nature", "photography", "easy", "waterfront", "step free", "outdoor"):
+    for word in ("nature", "photography", "easy", "waterfront", "step free", "outdoor", "right now"):
         assert word in q
 
 
@@ -174,7 +174,7 @@ def test_retrieves_three_relevant_quests(seeded):
     results = retriever.retrieve(PROFILE, k=3)
     assert len(results) == 3
     assert embedder.calls[-1][1] == "RETRIEVAL_QUERY"
-    assert all(r.duration_minutes <= 120 for r in results)
+    assert all(r.duration_minutes <= 25 for r in results)
     assert results[0].similarity >= results[1].similarity >= results[2].similarity
     # nature/photography/waterfront profile should surface matching quests
     assert any({"photography", "nature", "waterfront"} & set(r.tags) for r in results)

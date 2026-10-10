@@ -4,6 +4,7 @@ import 'app_routes.dart';
 import 'models/sample_quest.dart';
 import 'screens/account/edit_account_screen.dart';
 import 'screens/auth/login_screen.dart';
+import 'screens/auth/preferences_setup_screen.dart';
 import 'screens/auth/sign_up_screen.dart';
 import 'screens/history/quest_detail_screen.dart';
 import 'screens/home_shell.dart';
@@ -17,9 +18,9 @@ void main() {
 ///
 /// Navigation map (no functionality wired up yet):
 ///
-///   Log in  <->  Sign up                      (auth screens, no bottom bar)
-///      |            |
-///      +-----+------+
+///   Log in  <->  Sign up -> Set up your quests   (auth screens, no bottom bar)
+///      |                        |
+///      +-----------+------------+
 ///            v
 ///   HomeShell  - bottom bar:  Quest | History | Account
 ///                               |        |         |
@@ -38,6 +39,7 @@ class SidequestApp extends StatelessWidget {
       routes: {
         AppRoutes.login: (_) => const LoginScreen(),
         AppRoutes.signUp: (_) => const SignUpScreen(),
+        AppRoutes.preferencesSetup: (_) => const PreferencesSetupScreen(),
         AppRoutes.home: (_) => const HomeShell(),
         AppRoutes.editAccount: (_) => const EditAccountScreen(),
       },

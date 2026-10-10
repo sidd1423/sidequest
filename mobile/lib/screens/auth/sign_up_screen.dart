@@ -3,13 +3,13 @@ import 'package:flutter/material.dart';
 import '../../app_routes.dart';
 import 'auth_scaffold.dart';
 
-/// Sign up. Placeholder: "creating an account" just opens the main app.
+/// Sign up, step 1 of 2: account details. Step 2 is [PreferencesSetupScreen].
 class SignUpScreen extends StatelessWidget {
   const SignUpScreen({super.key});
 
   void _signUp(BuildContext context) {
-    // TODO: create the account, then send the user to set their quest preferences.
-    Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.home, (route) => false);
+    // TODO: create the account. Next step: choose quest preferences.
+    Navigator.of(context).pushNamed(AppRoutes.preferencesSetup);
   }
 
   void _goToLogIn(BuildContext context) {

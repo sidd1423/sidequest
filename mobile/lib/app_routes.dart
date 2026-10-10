@@ -6,6 +6,7 @@ abstract final class AppRoutes {
   // Auth (no bottom bar)
   static const login = '/login';
   static const signUp = '/signup';
+  static const preferencesSetup = '/signup/preferences'; // second sign-up step
 
   // Signed-in area (bottom bar)
   static const home = '/home';

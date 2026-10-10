@@ -8,7 +8,8 @@ Suggests "sidequests" that fit a user's interests, time, energy and constraints.
 Streamlit UI (app.py)  ──HTTP/JSON──▶  FastAPI backend (backend/)  ──▶  SQLite (sidequest.db)
         │                                      │
         │                                      ├──▶  Gemma via inference API (backend/llm.py)
-        │                                      └──▶  Tiger Data quest library (pgvector) (backend/retrieval.py)
+        │                                      └──▶  Example-quest library: local SQLite (backend/library.py)
+        │                                                 or Tiger Data pgvector (backend/retrieval.py)
         └──────── shared Pydantic schema (backend/schemas.py) ────────┘
 ```
 
@@ -61,7 +62,26 @@ copy .env.example .env
 Then set `GEMMA_API_KEY` in `.env` (free key: https://aistudio.google.com/apikey).
 To run Gemma locally with Ollama instead, see the commented lines in `.env.example`.
 
-## Tiger Data quest library (optional)
+## Example-quest library
+
+Gemma gets the 3 example quests most similar to the user's profile.
+
+**Local (default)** - `data/quest_library.db` ships with the repo, pre-seeded
+with the 30 quests in `tiger/seed_quests.json`. Embeddings come from
+[WordLlama](https://github.com/dleemiller/WordLlama) (256 dims), which runs
+offline with its weights bundled in the pip package - no API key needed.
+Ranking = cosine similarity + a small boost for category/tag matches with the
+user's interests, with quests that fit the time budget first.
+
+Re-seed after editing `tiger/seed_quests.json`:
+
+```powershell
+python -m backend.library
+```
+
+### Tiger Data (optional)
+
+Setting `TIGER_DATABASE_URL` switches retrieval to Tiger Data instead.
 
 1. Create a Tiger Data service and copy its connection string.
 2. In `.env`, set `TIGER_DATABASE_URL=<connection string>`.

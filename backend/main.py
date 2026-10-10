@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, status
 
-from . import db, retrieval
+from . import db, library, retrieval
 from .llm import GemmaClient, LLMClient, LLMError
 from .quest_generator import generate_quest
 from .schemas import (
@@ -74,27 +74,32 @@ def get_llm() -> LLMClient:
     return GemmaClient()
 
 
-def get_retriever() -> retrieval.TigerRetriever | None:
-    """Tiger Data retriever, or None when TIGER_DATABASE_URL isn't set."""
-    return retrieval.TigerRetriever() if retrieval.is_configured() else None
+def get_retriever() -> retrieval.Retriever | None:
+    """Where example quests come from: Tiger Data if TIGER_DATABASE_URL is set,
+    otherwise the local SQLite library (data/quest_library.db) if it exists."""
+    if retrieval.is_configured():
+        return retrieval.TigerRetriever()
+    if library.is_available():
+        return library.LocalLibraryRetriever()
+    return None
 
 
 def find_examples(
     user_id: str,
     prefs: PreferencesIn,
     history: list[FeedbackEntry] | None,
-    retriever: retrieval.TigerRetriever | None,
+    retriever: retrieval.Retriever | None,
     k: int = 3,
 ) -> list[QuestExample]:
-    """Top-k example quests: Tiger Data vector search, falling back to the
-    user's own liked quests if Tiger isn't configured or is unreachable."""
+    """Top-k example quests from the vector library (Tiger or local), falling
+    back to the user's own liked quests if no library is available."""
     if retriever is not None:
         try:
             examples = retriever.retrieve(prefs, history, k=k)
             if examples:
                 return examples
         except retrieval.RetrievalError as exc:
-            log.warning("Tiger retrieval failed, using local examples instead: %s", exc)
+            log.warning("Library retrieval failed, using the user's past quests instead: %s", exc)
     return db.retrieve_examples(user_id, prefs, k=k)
 
 
@@ -102,7 +107,7 @@ def find_examples(
 def create_quest(
     user_id: str = UserId,
     llm: LLMClient = Depends(get_llm),
-    retriever: retrieval.TigerRetriever | None = Depends(get_retriever),
+    retriever: retrieval.Retriever | None = Depends(get_retriever),
 ) -> QuestRecord:
     """Generate a new sidequest from the user's saved preferences and history."""
     profile = db.get_preferences(user_id)

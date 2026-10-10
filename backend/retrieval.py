@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Sequence
+from typing import Protocol, Sequence
 
 from .embeddings import Embedder, EmbeddingError, GeminiEmbedder
 from .schemas import FeedbackEntry, PreferencesIn, QuestExample
@@ -22,6 +22,23 @@ _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
 
 class RetrievalError(RuntimeError):
     pass
+
+
+class Retriever(Protocol):
+    """Anything that can return the top-k example quests for a user."""
+
+    def retrieve(
+        self, profile: PreferencesIn, feedback: Sequence[FeedbackEntry] | None = None, k: int = 3
+    ) -> list[QuestExample]: ...
+
+
+def embedding_text(q: dict) -> str:
+    """What we embed for each library quest - its text plus metadata."""
+    return (
+        f"{q['quest_text']} Category: {q['category']}. "
+        f"Takes about {q['duration_minutes']} minutes. Difficulty: {q['difficulty']}. "
+        f"Tags: {', '.join(q['tags'])}."
+    )
 
 
 def tiger_url() -> str:
@@ -40,27 +57,34 @@ def is_configured() -> bool:
 
 
 def build_query_text(profile: PreferencesIn, feedback: Sequence[FeedbackEntry] | None = None) -> str:
-    """Describe what this user wants, in words, for the embedding model."""
+    """Describe what this user wants, in words, for the embedding model.
+
+    Interests lead (and are repeated) because they matter most for relevance;
+    hard limits like time and weather are enforced elsewhere, not by similarity.
+    """
     interests = [i.value for i in profile.interests] + profile.custom_interests
     env = profile.environment
     parts = [
-        f"A sidequest about {', '.join(interests)}.",
-        f"Takes about {profile.availability.duration_minutes} minutes.",
-        f"Difficulty {profile.difficulty.value}, energy level {profile.energy_level} out of 5.",
+        f"{', '.join(interests)} sidequest.",
+        f"An activity about {' and '.join(interests)}.",
         f"Setting: {env.setting.value}" + (f", {', '.join(s.value for s in env.surroundings)}" if env.surroundings else "") + ".",
-        f"Crowds: {env.crowd_tolerance.value}. Group: {env.group_size.value.replace('_', ' ')}.",
+        f"Difficulty {profile.difficulty.value}, energy {profile.energy_level} of 5.",
     ]
+    if env.group_size.value != "solo":
+        parts.append(f"With {env.group_size.value.replace('_', ' ')}, social.")
     if profile.availability.preferred_times:
         parts.append(f"Time of day: {', '.join(t.value for t in profile.availability.preferred_times)}.")
     if profile.accessibility.needs:
         parts.append(f"Accessible: {', '.join(n.value.replace('_', ' ') for n in profile.accessibility.needs)}.")
-    if profile.weather.avoid:
-        parts.append(f"Avoid {', '.join(w.value.replace('_', ' ') for w in profile.weather.avoid)}.")
     if feedback:
         liked = [f.quest_title for f in feedback if f.completed and (f.rating or 0) >= 4]
         if liked:
             parts.append(f"Similar to quests they loved: {'; '.join(liked[:3])}.")
     return " ".join(parts)
+
+
+def interest_terms(profile: PreferencesIn) -> set[str]:
+    return {i.value for i in profile.interests} | {c.lower() for c in profile.custom_interests}
 
 
 SEARCH_SQL = """

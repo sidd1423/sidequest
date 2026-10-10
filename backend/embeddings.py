@@ -1,8 +1,11 @@
-"""Text embeddings via Google's Gemini embedding API.
+"""Text embeddings.
 
-Uses the same Google AI Studio key as Gemma by default. Vectors are reduced
-to EMBEDDING_DIM (768) dimensions and L2-normalised, as Google recommends
-for reduced sizes, so that cosine search in pgvector behaves well.
+- LocalEmbedder: WordLlama (256 dims), runs fully offline - weights ship inside
+  the pip package. Used for the local SQLite quest library.
+- GeminiEmbedder: Google's gemini-embedding-001 (768 dims) via the Gemini API,
+  using the same key as Gemma. Used for the Tiger Data library.
+
+Vectors are L2-normalised so a dot product is cosine similarity.
 """
 
 from __future__ import annotations
@@ -80,3 +83,30 @@ class GeminiEmbedder:
         if any(len(v) != self.dim for v in vectors):
             raise EmbeddingError(f"Expected {self.dim}-dim vectors, got {len(vectors[0])}")
         return [_normalise(v) for v in vectors]
+
+
+class LocalEmbedder:
+    """Offline embeddings with WordLlama (model weights are bundled in the wheel)."""
+
+    model = "wordllama-l2-supercat-256"
+    dim = 256
+    _wl = None  # loaded once per process
+
+    @classmethod
+    def _load(cls):
+        if cls._wl is None:
+            try:
+                from pathlib import Path
+
+                import wordllama
+                from wordllama import WordLlama
+            except ImportError as exc:
+                raise EmbeddingError("wordllama is not installed - run: pip install -r requirements.txt") from exc
+            # The package ships its tokenizer under wordllama/tokenizers/, which the
+            # loader only finds via cache_dir; this keeps it fully offline.
+            cls._wl = WordLlama.load(cache_dir=Path(wordllama.__file__).parent, disable_download=True)
+        return cls._wl
+
+    def embed(self, texts: Sequence[str], task: TaskType = "RETRIEVAL_DOCUMENT") -> list[list[float]]:
+        vectors = self._load().embed(list(texts), norm=True)
+        return [list(map(float, v)) for v in vectors]

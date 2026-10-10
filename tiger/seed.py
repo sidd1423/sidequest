@@ -21,15 +21,6 @@ from dotenv import load_dotenv
 HERE = Path(__file__).parent
 
 
-def embedding_text(q: dict) -> str:
-    """What we embed for each library quest - text plus its metadata."""
-    return (
-        f"{q['quest_text']} Category: {q['category']}. "
-        f"Takes about {q['duration_minutes']} minutes. Difficulty: {q['difficulty']}. "
-        f"Tags: {', '.join(q['tags'])}."
-    )
-
-
 def load_seed(path: Path) -> list[dict]:
     from backend.schemas import QuestExample
 
@@ -42,6 +33,7 @@ def load_seed(path: Path) -> list[dict]:
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     from backend import retrieval
+    from backend.retrieval import embedding_text
     from backend.embeddings import GeminiEmbedder
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

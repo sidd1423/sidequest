@@ -7,7 +7,7 @@ quests with Gemma, rate them and browse your history - **offline-first**.
 
 | What | Stored on the device in | Works offline? |
 |---|---|---|
-| Login session (token + name/email) | `flutter_secure_storage` (Keychain / Android Keystore / Windows DPAPI) | Yes - the app opens straight into your account |
+| Login session (token + name/email) | `shared_preferences` (app-private storage) | Yes - the app opens straight into your account |
 | Preferences, quest history | `shared_preferences` cache, per account | Yes - shown from the cache, refreshed when online |
 | Ratings & preference edits made offline | an *outbox* in the same cache | Yes - saved instantly, sent when back online |
 | Signing up, logging in, changing name/email, **generating a quest** | - | No - these need the server (Gemma runs there) |
@@ -61,7 +61,7 @@ Log in  <──>  Sign up ──▶ Set up your quests   auth screens - no botto
   `NavigationBar` + `IndexedStack`, so each tab keeps its state).
 - Route names are in `lib/app_routes.dart`; routes are registered in `lib/main.dart`.
 - The app opens on Home when a session is saved on the device, otherwise on Log in.
-- Packages: `http`, `shared_preferences`, `flutter_secure_storage`. State is a
+- Packages: `http`, `shared_preferences`. State is a
   plain `ChangeNotifier` (`lib/data/app_state.dart`) shared via `AppScope`.
 
 ## Run it (Windows)
@@ -89,6 +89,5 @@ Log in  <──>  Sign up ──▶ Set up your quests   auth screens - no botto
    The app calls `http://localhost:8000` (Android emulator: `http://10.0.2.2:8000`).
    On a real phone, use your computer's LAN address:
    `flutter run --dart-define=API_BASE_URL=http://192.168.1.20:8000`.
-   Windows desktop builds need Visual Studio's *C++ ATL* component (used by
-   `flutter_secure_storage`). Debug Android builds allow plain `http://` (see
+   Debug Android builds allow plain `http://` (see
    `android/app/src/debug/AndroidManifest.xml`); use HTTPS for release.

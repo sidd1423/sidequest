@@ -17,7 +17,7 @@ class Account {
   Map<String, dynamic> toJson() => {'id': id, 'email': email, 'name': name};
 }
 
-/// A login session. The token is kept in secure storage on the device so the
+/// A login session. The token is kept on the device (app-private storage) so the
 /// app opens straight into your account, even with no connection.
 class Session {
   const Session({required this.token, required this.account});

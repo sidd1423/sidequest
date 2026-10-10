@@ -14,7 +14,7 @@ import 'key_value_store.dart';
 /// the app works offline.
 ///
 /// Offline-first:
-/// - The session token lives in secure storage, so the app opens straight
+/// - The session token is saved on the device (app-private storage), so the app opens straight
 ///   into your account with no connection.
 /// - Your profile and quest history are cached on the device and shown from
 ///   the cache; they refresh from the server whenever it's reachable.
@@ -25,6 +25,9 @@ import 'key_value_store.dart';
 /// - Only these need a connection: signing up, logging in, editing name/email
 ///   and generating a new quest (Gemma runs on the server).
 class AppState extends ChangeNotifier {
+  /// [secure] holds the login session. The app passes the same
+  /// shared_preferences store as [cache]; it's a separate parameter so a
+  /// Keychain/Keystore-backed store can be dropped in later.
   AppState({required this.api, required KeyValueStore cache, required KeyValueStore secure})
       : _cache = cache,
         _secure = secure;

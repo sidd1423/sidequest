@@ -15,11 +15,8 @@ import 'theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final state = AppState(
-    api: ApiClient(),
-    cache: await SharedPrefsStore.open(),
-    secure: SecureStore(),
-  );
+  final store = await SharedPrefsStore.open();
+  final state = AppState(api: ApiClient(), cache: store, secure: store);
   await state.restore(); // local only - opens straight into the app when logged in, even offline
   runApp(SidequestApp(state: state));
   state.sync(); // in the background: send queued changes, pull the latest

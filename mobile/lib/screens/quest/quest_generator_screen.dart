@@ -11,7 +11,8 @@ import 'quest_feedback_form.dart';
 
 /// Quest tab (home).
 ///
-/// 1. Pick this quest's settings: minutes, difficulty, energy, distance.
+/// 1. Pick this quest's settings: minutes, who's with you, difficulty,
+///    energy, distance.
 /// 2. Tap Generate - only then does the quest card appear.
 /// 3. Rate it under the card ("How did it go?").
 ///
@@ -30,6 +31,7 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
   String _difficulty = 'easy';
   double _energy = 3;
   double _distanceKm = 1.0;
+  String _group = 'solo';
 
   QuestRecord? _record;
   QuestFeedback? _feedback;
@@ -48,6 +50,7 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
         difficulty: _difficulty,
         energy: _energy.round(),
         distanceKm: _distanceKm,
+        group: _group,
       ));
       if (!mounted) return;
       setState(() {
@@ -123,6 +126,21 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
                   label: Text('$m min'),
                   selected: _minutes == m,
                   onSelected: (_) => setState(() => _minutes = m),
+                ),
+            ],
+          ),
+
+          heading("Who's with you?"),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final o in groupOptions)
+                ChoiceChip(
+                  key: Key('group_${o.value}'),
+                  label: Text(o.label),
+                  selected: _group == o.value,
+                  onSelected: (_) => setState(() => _group = o.value),
                 ),
             ],
           ),

@@ -4,8 +4,9 @@ import '../models/preference_options.dart';
 import '../models/profile_preferences.dart';
 
 /// The "set once" quest preferences: interests, accessibility, surroundings,
-/// crowds, group and weather. Used by the sign-up preferences step and by
-/// Edit account. Difficulty, energy and distance are chosen per quest instead.
+/// crowds and weather. Used by the sign-up preferences step and by
+/// Edit account. Minutes, difficulty, energy, distance and who's with you are
+/// chosen per quest instead.
 ///
 /// Edits [preferences] in place and calls [onChanged] after every change.
 class ProfilePreferencesForm extends StatefulWidget {
@@ -114,9 +115,6 @@ class _ProfilePreferencesFormState extends State<ProfilePreferencesForm> {
 
         _heading(context, 'Crowds'),
         _singleChips('crowd', crowdOptions, _p.crowd, (v) => _p.crowd = v),
-
-        _heading(context, "Who's usually with you?"),
-        _singleChips('group', groupOptions, _p.group, (v) => _p.group = v),
 
         _heading(context, 'Weather', 'Conditions to avoid'),
         _multiChips('weather', weatherAvoidOptions, _p.weatherAvoid),

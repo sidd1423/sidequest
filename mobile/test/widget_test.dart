@@ -133,6 +133,7 @@ void main() {
       expect(find.byKey(const Key('bottom_nav')), findsNothing);
       expect(find.text('Difficulty'), findsNothing);
       expect(find.textContaining('Energy'), findsNothing);
+      expect(find.textContaining("Who's"), findsNothing); // asked before each quest instead
       expect(rootCanPop(tester), isFalse); // the account exists - no going back to the form
       expect(backend.users.values.single['email'], 'new@example.com');
       expect(secure.values['session'], isNotNull); // token kept on the device
@@ -265,6 +266,7 @@ void main() {
       expect(backend.preferences[state.account!.id]!['interests'], containsAll(['nature', 'art']));
       // per-quest defaults saved elsewhere aren't wiped
       expect(backend.preferences[state.account!.id]!['difficulty'], 'easy');
+      expect((backend.preferences[state.account!.id]!['environment'] as Map<String, dynamic>)['group_size'], 'solo');
     });
 
     testWidgets('an expired session keeps local data and asks to log in again', (tester) async {
@@ -320,7 +322,7 @@ void main() {
   group('Quest page', () {
     testWidgets('per-quest settings are on the Quest page', (tester) async {
       await startLoggedIn(tester);
-      for (final key in ['minutes_15', 'difficulty_easy', 'energy_slider', 'distance_slider']) {
+      for (final key in ['minutes_15', 'group_solo', 'difficulty_easy', 'energy_slider', 'distance_slider']) {
         expect(find.byKey(Key(key)), findsOneWidget, reason: key);
       }
     });
@@ -331,6 +333,7 @@ void main() {
       expect(find.byKey(const Key('feedback_form')), findsNothing);
 
       await tapAndSettle(tester, find.byKey(const Key('minutes_10')));
+      await tapAndSettle(tester, find.byKey(const Key('group_pair')));
       await tapAndSettle(tester, find.byKey(const Key('difficulty_challenging')));
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
 
@@ -339,6 +342,7 @@ void main() {
         'difficulty': 'challenging',
         'energy_level': 3,
         'max_travel_km': 1.0,
+        'group_size': 'pair',
       });
       final card = find.byKey(const Key('quest_card'));
       expect(card, findsOneWidget);

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart' show RangeValues;
 
 /// The preferences a user sets once (at sign-up) and can change in Edit
-/// account. Difficulty, energy, distance and minutes are NOT here - those are
+/// account. Minutes, difficulty, energy, distance and who's with you are NOT here - those are
 /// picked on the Quest page right before each quest.
 class ProfilePreferences {
   ProfilePreferences({
@@ -11,7 +11,6 @@ class ProfilePreferences {
     this.accessibilityNotes = '',
     Set<String>? surroundings,
     this.crowd = 'moderate',
-    this.group = 'solo',
     Set<String>? weatherAvoid,
     this.temperatureC = const RangeValues(5, 30),
     Map<String, dynamic>? perQuestDefaults,
@@ -27,7 +26,6 @@ class ProfilePreferences {
   String accessibilityNotes;
   final Set<String> surroundings;
   String crowd;
-  String group;
   final Set<String> weatherAvoid;
   RangeValues temperatureC;
 
@@ -57,7 +55,7 @@ class ProfilePreferences {
       'environment': {
         'surroundings': surroundings.toList(),
         'crowd_tolerance': crowd,
-        'group_size': group,
+        if (d['group_size'] != null) 'group_size': d['group_size'],
         if (d['max_travel_km'] != null) 'max_travel_km': d['max_travel_km'],
       },
       'weather': {
@@ -81,7 +79,6 @@ class ProfilePreferences {
       accessibilityNotes: (accessibility['notes'] as String?) ?? '',
       surroundings: strings(environment['surroundings']),
       crowd: (environment['crowd_tolerance'] as String?) ?? 'moderate',
-      group: (environment['group_size'] as String?) ?? 'solo',
       weatherAvoid: strings(weather['avoid']),
       // Clamped to the form's slider range (-20..40 C).
       temperatureC: RangeValues(
@@ -93,6 +90,7 @@ class ProfilePreferences {
         if (json['difficulty'] != null) 'difficulty': json['difficulty'],
         if (json['energy_level'] != null) 'energy_level': json['energy_level'],
         if (environment['max_travel_km'] != null) 'max_travel_km': environment['max_travel_km'],
+        if (environment['group_size'] != null) 'group_size': environment['group_size'],
       },
     );
   }

@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import auth, db, history, library, retrieval
+from . import auth, db, history, library, retrieval, taste as taste_mod
 from .llm import GemmaClient, LLMClient, LLMError
 from .quest_generator import generate_quest
 from .schemas import (
@@ -149,14 +149,17 @@ def find_examples(
     history: list[FeedbackEntry] | None,
     retriever: retrieval.Retriever | None,
     k: int = 3,
+    taste: taste_mod.Taste | None = None,
 ) -> list[QuestExample]:
     """Top-k example quests from the vector library (Tiger or local), falling
-    back to the user's own liked quests if no library is available."""
+    back to the user's own liked quests if no library is available. Pulls a
+    few extra and re-ranks them by the user's learned taste, so kinds of
+    quests they dislike aren't shown to Gemma as inspiration."""
     if retriever is not None:
         try:
-            examples = retriever.retrieve(prefs, history, k=k)
+            examples = retriever.retrieve(prefs, history, k=k * 3)
             if examples:
-                return examples
+                return taste_mod.rerank_examples(examples, taste, k)
         except retrieval.RetrievalError as exc:
             log.warning("Library retrieval failed, using the user's past quests instead: %s", exc)
     return db.retrieve_examples(user_id, prefs, k=k)
@@ -183,7 +186,12 @@ def create_quest(
     # Feedback is empty on a user's first run; examples come from the Tiger
     # library (so even new users get them) or, failing that, past liked quests.
     feedback = db.feedback_history(user_id) or None
-    examples = find_examples(user_id, prefs, feedback, retriever) or None
+    # The feedback loop: patterns from everything this user has rated.
+    taste = taste_mod.learn_taste(db.rated_quests(user_id))
+    if not taste.is_empty:
+        log.info("Feedback loop for %s: %d rated, likes %s, dislikes %s, time x%s",
+                 user_id, taste.rated, taste.liked_tags, taste.disliked_tags, taste.time_ratio)
+    examples = find_examples(user_id, prefs, feedback, retriever, taste=taste) or None
     try:  # the user's last 10 quests + how they went (data/user_history.db)
         recent = history.recent(user_id)
     except Exception as exc:
@@ -191,7 +199,7 @@ def create_quest(
         recent = []
 
     try:
-        quest = generate_quest(prefs, examples, feedback, recent_quests=recent, llm=llm)
+        quest = generate_quest(prefs, examples, feedback, recent_quests=recent, taste=taste, llm=llm)
     except LLMError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     record = db.add_quest(user_id, quest, model=getattr(llm, "model", ""))

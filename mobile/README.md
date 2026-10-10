@@ -22,9 +22,12 @@ first if changes haven't synced). Logic: `lib/data/app_state.dart`.
 **Which preferences live where**
 
 - *Set once* (Sign up step 2, editable in Edit account): interests, accessibility,
-  surroundings, crowds, who's with you, weather to avoid + temperature range.
-- *Picked before each quest* (Quest tab): minutes (5-30), difficulty, energy,
-  distance (0-5 km).
+  surroundings, crowds, weather to avoid + temperature range.
+- *Picked before each quest* (Quest tab): minutes (5-30), who's with you,
+  difficulty, energy, distance (0-5 km) - sent with the Generate request.
+- **Generate** asks the backend, which asks Gemma with your profile, these
+  settings, 3 example quests and your feedback (see "Feedback loop" in the
+  main README). Ratings you send shape the next quest.
 - The quest card appears only after tapping **Generate**, with the
   "How did it go?" rating form underneath (completed / didn't finish, stars -
   required only if completed - time spent, comment).

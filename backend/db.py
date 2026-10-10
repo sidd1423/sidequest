@@ -189,6 +189,18 @@ def feedback_history(user_id: str, limit: int = 10) -> list[FeedbackEntry]:
     return entries
 
 
+def rated_quests(user_id: str, limit: int = 200) -> list[tuple[Quest, FeedbackIn]]:
+    """Every quest the user gave feedback on (newest first) - what taste.learn_taste() learns from."""
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT data, feedback FROM quests
+               WHERE user_id = ? AND feedback IS NOT NULL
+               ORDER BY feedback_at DESC LIMIT ?""",
+            (user_id, limit),
+        ).fetchall()
+    return [(Quest.model_validate_json(r["data"]), FeedbackIn.model_validate_json(r["feedback"])) for r in rows]
+
+
 def retrieve_examples(user_id: str, profile: PreferencesIn, k: int = 3, min_rating: int = 4) -> list[QuestExample]:
     """Fallback retrieval when Tiger Data isn't configured: the user's
     best-liked completed quests, favouring tag overlap with their interests."""

@@ -226,6 +226,7 @@ class QuestSettings(BaseModel):
     difficulty: Difficulty | None = None
     energy_level: int | None = Field(None, ge=1, le=5)
     max_travel_km: float | None = Field(None, ge=0, le=MAX_TRAVEL_KM)
+    group_size: GroupSize | None = None
 
     def apply(self, prefs: "PreferencesIn") -> "PreferencesIn":
         data = prefs.model_dump()
@@ -237,6 +238,8 @@ class QuestSettings(BaseModel):
             data["energy_level"] = self.energy_level
         if self.max_travel_km is not None:
             data["environment"]["max_travel_km"] = self.max_travel_km
+        if self.group_size is not None:
+            data["environment"]["group_size"] = self.group_size
         return PreferencesIn.model_validate(data)
 
 

@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from .llm import GemmaClient, LLMClient, LLMError, LLMTimeout
 from .schemas import MIN_QUEST_MINUTES, FeedbackEntry, PastQuest, PreferencesIn, Quest, QuestExample
+from .taste import Taste, conflicts_with_taste, taste_block
 
 MAX_ATTEMPTS = 3
 MAX_TIMEOUT_RETRIES = 1     # a timeout is usually a busy server - retry once
@@ -34,7 +35,7 @@ QUEST_JSON_SHAPE = """{
   "tags": ["nature", "photography"],
   "accessibility_notes": "how this quest accommodates the user's needs (or empty)",
   "weather_backup": "a quick OUTDOOR alternative if the weather turns (e.g. under a covered spot)",
-  "why_it_fits": "one sentence on why this matches the user"
+  "why_it_fits": "one sentence on why this matches the user - mention what in their feedback shaped it, if any"
 }"""
 
 
@@ -106,6 +107,7 @@ def build_prompt(
     retrieved_examples: Sequence[QuestExample] | None = None,
     feedback_history: Sequence[FeedbackEntry] | None = None,
     recent_quests: Sequence[PastQuest] | None = None,
+    taste: Taste | None = None,
 ) -> str:
     minutes = profile.availability.duration_minutes
     parts = [
@@ -122,6 +124,7 @@ def build_prompt(
         "gear or planning ahead.",
         f"- Takes between {MIN_QUEST_MINUTES} and {minutes} minutes in total, including getting there "
         "and back.",
+        f"- Works for this group right now: {profile.environment.group_size.value.replace('_', ' ')}.",
         f"- Stays within {profile.environment.max_travel_km:g} km of where they are now (walking or "
         "rolling distance).",
         f"- Difficulty around '{profile.difficulty.value}' and energy demand about {profile.energy_level}/5.",
@@ -140,6 +143,13 @@ def build_prompt(
             _examples_block(retrieved_examples),
         ]
 
+    if taste is not None and not taste.is_empty:
+        parts += [
+            "",
+            "## What their feedback shows overall (learned from every quest they've rated - follow it)",
+            taste_block(taste),
+        ]
+
     if recent_quests:
         parts += [
             "",
@@ -153,7 +163,7 @@ def build_prompt(
             _feedback_block(feedback_history),
         ]
 
-    if not recent_quests and not feedback_history:
+    if not recent_quests and not feedback_history and (taste is None or taste.is_empty):
         parts += ["", "This is the user's first quest - pick something easy to say yes to that clearly matches "
                   "their interests."]
 
@@ -220,7 +230,9 @@ def too_similar_to_disliked(quest: Quest, disliked: PastQuest) -> bool:
     return category is not None and len(tags & set(disliked.tags)) >= 2
 
 
-def _violations(quest: Quest, profile: PreferencesIn, recent: Sequence[PastQuest] = ()) -> list[str]:
+def _violations(
+    quest: Quest, profile: PreferencesIn, recent: Sequence[PastQuest] = (), taste: Taste | None = None
+) -> list[str]:
     problems = []
     available = profile.availability.duration_minutes
     if quest.estimated_minutes > available:
@@ -240,6 +252,12 @@ def _violations(quest: Quest, profile: PreferencesIn, recent: Sequence[PastQuest
                 "pick a clearly different kind of activity"
             )
             break
+    disliked = conflicts_with_taste(quest, taste)
+    if disliked:
+        problems.append(
+            f"built around {', '.join(disliked)}, which this user consistently rates low or abandons - "
+            "pick a different kind of activity"
+        )
     return problems
 
 
@@ -249,6 +267,7 @@ def generate_quest(
     feedback_history: Sequence[FeedbackEntry] | None = None,
     *,
     recent_quests: Sequence[PastQuest] | None = None,
+    taste: Taste | None = None,
     llm: LLMClient | None = None,
 ) -> Quest:
     """Generate one sidequest tailored to `profile`.
@@ -258,10 +277,11 @@ def generate_quest(
       feedback_history    feedback on past quests (used if recent_quests isn't given)
       recent_quests       the user's last 10 quests from the user history database;
                           the new quest must not repeat them or resemble disliked ones
+      taste               patterns learned from ALL the user's feedback (taste.learn_taste)
     """
     llm = llm or GemmaClient()
     recent_quests = list(recent_quests or [])
-    prompt = build_prompt(profile, retrieved_examples, feedback_history, recent_quests)
+    prompt = build_prompt(profile, retrieved_examples, feedback_history, recent_quests, taste)
 
     budget = float(os.getenv("GEMMA_TIME_BUDGET") or DEFAULT_TIME_BUDGET)
     started = time.monotonic()
@@ -293,7 +313,7 @@ def generate_quest(
             last_error = str(exc).splitlines()[0][:300]
             log.warning("Unusable model output (%s). Start of output: %r", last_error, raw[:500])
             continue
-        problems = _violations(quest, profile, recent_quests)
+        problems = _violations(quest, profile, recent_quests, taste)
         if problems:
             last_error = "; ".join(problems)
             continue

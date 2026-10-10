@@ -53,13 +53,6 @@ const crowdOptions = [
   PreferenceOption('busy', 'Busy is fine'),
 ];
 
-const groupOptions = [
-  PreferenceOption('solo', 'Just me'),
-  PreferenceOption('pair', 'Pair'),
-  PreferenceOption('small_group', 'Small group'),
-  PreferenceOption('large_group', 'Large group'),
-];
-
 const weatherAvoidOptions = [
   PreferenceOption('rain', 'Rain'),
   PreferenceOption('snow', 'Snow'),
@@ -73,6 +66,13 @@ const weatherAvoidOptions = [
 // --- Chosen right before each quest ---------------------------------------------
 
 const minuteOptions = [5, 10, 15, 20, 30];
+
+const groupOptions = [
+  PreferenceOption('solo', 'Just me'),
+  PreferenceOption('pair', 'Me + 1'),
+  PreferenceOption('small_group', 'Small group (3-6)'),
+  PreferenceOption('large_group', 'Big group (7+)'),
+];
 
 const difficultyOptions = [
   PreferenceOption('easy', 'Easy'),

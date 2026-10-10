@@ -45,6 +45,27 @@ Streamlit UI (app.py)  ──HTTP/JSON──▶  FastAPI backend (backend/)  ─
 - **Gemma client** `backend/llm.py`: calls any OpenAI-compatible
   `/chat/completions` endpoint - Google AI Studio by default, or Ollama/vLLM/etc.
 
+### Feedback loop
+
+Every rating the user sends (completed / didn't finish, 1-5 stars, time
+spent, comment) changes the next quest in four places:
+
+1. **Learned taste** (`backend/taste.py`): every quest the user has ever rated
+   is boiled down to tags and difficulty they rate high or low (or abandon),
+   whether they take longer or shorter than estimated, how often they finish,
+   and their latest comments. This goes into the Gemma prompt as
+   "What their feedback shows overall".
+2. **Last 10 quests** (`data/user_history.db`): listed one by one as Loved /
+   DISLIKED / Rated OK / Didn't finish, and never repeated.
+3. **Example quests**: retrieval fetches extras and pushes examples that look
+   like disliked quests to the back, so Gemma isn't inspired by them.
+4. **Validation**: a Gemma answer built around disliked tags, or too similar to
+   a disliked quest, is rejected and Gemma is asked again with the reason.
+
+Gemma itself isn't retrained - it's personalised through the prompt every
+time. `why_it_fits` on the quest card says what in the feedback shaped it.
+The backend log prints the learned taste on each generation.
+
 ### API
 
 | Method | Path | Description |
@@ -57,7 +78,7 @@ Streamlit UI (app.py)  ──HTTP/JSON──▶  FastAPI backend (backend/)  ─
 | GET    | `/users/{user_id}/preferences` | Fetch saved preferences (404 if none) |
 | PUT    | `/users/{user_id}/preferences` | Create or update preferences |
 | DELETE | `/users/{user_id}/preferences` | Delete preferences |
-| POST   | `/users/{user_id}/quests` | Generate a new sidequest with Gemma. Optional body `{duration_minutes, difficulty, energy_level, max_travel_km}` overrides the profile for this quest |
+| POST   | `/users/{user_id}/quests` | Generate a new sidequest with Gemma. Optional body `{duration_minutes, group_size, difficulty, energy_level, max_travel_km}` overrides the profile for this quest |
 | GET    | `/users/{user_id}/quests` | List the user's quests, newest first |
 | POST   | `/users/{user_id}/quests/{quest_id}/feedback` | Mark completed/skipped, rate 1-5, comment |
 

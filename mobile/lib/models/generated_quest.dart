@@ -95,17 +95,20 @@ class QuestSettings {
     required this.difficulty,
     required this.energy,
     required this.distanceKm,
+    required this.group,
   });
 
   final int minutes;
   final String difficulty;
   final int energy;
   final double distanceKm;
+  final String group; // solo | pair | small_group | large_group
 
   Map<String, dynamic> toJson() => {
         'duration_minutes': minutes,
         'difficulty': difficulty,
         'energy_level': energy,
         'max_travel_km': distanceKm,
+        'group_size': group,
       };
 }

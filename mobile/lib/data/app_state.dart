@@ -9,6 +9,7 @@ import '../models/generated_quest.dart';
 import '../models/journal_entry.dart';
 import '../models/profile_preferences.dart';
 import '../models/quest_record.dart';
+import '../models/rewards.dart';
 import 'api_client.dart';
 import 'key_value_store.dart';
 
@@ -40,7 +41,7 @@ class AppState extends ChangeNotifier {
   final KeyValueStore _secure;
 
   static const _sessionKey = 'session';
-  static const _cacheNames = ['profile', 'quests', 'outbox', 'meta', 'journal'];
+  static const _cacheNames = ['profile', 'quests', 'outbox', 'meta', 'journal', 'rewards'];
 
   Session? _session;
   ProfilePreferences? _profile;
@@ -51,6 +52,7 @@ class AppState extends ChangeNotifier {
   bool _sessionExpired = false;
   String? _lastSyncError;
   int _completedCount = 0;
+  Rewards? _rewards;
   int? _activeQuestId;
   Map<int, List<JournalEntry>> _journals = {};
   final Map<String, Uint8List> _photoCache = {}; // downloaded photos, by client id (memory only)
@@ -64,6 +66,9 @@ class AppState extends ChangeNotifier {
 
   /// Newest first.
   List<QuestRecord> get quests => List.unmodifiable(_quests);
+
+  /// Points, level, streaks and badges (last copy from the server; null until loaded).
+  Rewards? get rewards => _rewards;
 
   /// Total quests completed (the counter on the Quest screen).
   int get completedCount => _completedCount;
@@ -128,6 +133,7 @@ class AppState extends ChangeNotifier {
       _completedCount = 0;
       _activeQuestId = null;
       _journals = {};
+      _rewards = null;
     }
   }
 
@@ -146,6 +152,8 @@ class AppState extends ChangeNotifier {
     final m = meta == null ? const <String, dynamic>{} : jsonDecode(meta) as Map<String, dynamic>;
     _completedCount = (m['completed'] as num?)?.toInt() ?? 0;
     _activeQuestId = (m['active_quest'] as num?)?.toInt();
+    final rewards = await _cache.read(_key('rewards'));
+    _rewards = rewards == null ? null : Rewards.fromJson(jsonDecode(rewards) as Map<String, dynamic>);
     final journal = await _cache.read(_key('journal'));
     _journals = {};
     if (journal != null) {
@@ -167,6 +175,7 @@ class AppState extends ChangeNotifier {
       'outbox:$id': jsonEncode(_outbox),
       'meta:$id': jsonEncode({'completed': _completedCount, 'active_quest': _activeQuestId}),
       'journal:$id': jsonEncode([for (final list in _journals.values) for (final e in list) e.toJson()]),
+      if (_rewards != null) 'rewards:$id': jsonEncode(_rewards!.toJson()),
     };
     for (final entry in values.entries) {
       if (_session?.token != session.token) return; // logged out meanwhile - don't write it back
@@ -236,6 +245,7 @@ class AppState extends ChangeNotifier {
     _completedCount = 0;
     _activeQuestId = null;
     _journals = {};
+    _rewards = null;
     _photoCache.clear();
     _sessionExpired = false;
     _lastSyncError = null;
@@ -372,6 +382,25 @@ class AppState extends ChangeNotifier {
       // show what's cached
     } on ApiException {
       // e.g. quest gone - show what's cached
+    }
+  }
+
+  /// Refresh points/level/badges: sends queued changes first so they count.
+  /// Offline, the last saved copy stays.
+  Future<void> loadRewards() async {
+    await sync(refresh: false);
+    final session = _session;
+    if (session == null) return;
+    try {
+      final json = await _call(() => api.get('/users/${session.account.id}/rewards'));
+      if (_session?.token != session.token) return;
+      _rewards = Rewards.fromJson(json as Map<String, dynamic>);
+      await _saveCache();
+      notifyListeners();
+    } on OfflineException {
+      // keep the cached copy
+    } on ApiException {
+      // keep the cached copy
     }
   }
 

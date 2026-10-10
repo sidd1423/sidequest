@@ -81,6 +81,7 @@ The backend log prints the learned taste on each generation.
 | DELETE | `/users/{user_id}/preferences` | Delete preferences |
 | POST   | `/users/{user_id}/quests` | Generate a new sidequest with Gemma. Optional body `{duration_minutes, group_size, difficulty, energy_level, max_travel_km}` overrides the profile for this quest |
 | GET    | `/users/{user_id}/quests` | List the user's quests, newest first |
+| GET    | `/users/{user_id}/rewards` | Points, level, streaks, badges and recent points (rules in `backend/rewards.py`) |
 | GET    | `/users/{user_id}/stats` | `{completed, generated, minutes_outside}` |
 | GET / POST | `/users/{user_id}/quests/{quest_id}/logs` | Quest log: list / add a note or photo `{client_id, kind: note\|photo, text, image_base64?, mime?}` (same `client_id` again = update) |
 | GET    | `/users/{user_id}/logs/{log_id}/photo` | A photo's bytes |

@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../data/app_scope.dart';
 import '../models/journal_entry.dart';
+import 'coming_soon.dart';
 
 /// A picked photo, ready to upload.
 class PickedPhoto {
@@ -174,6 +175,14 @@ class _QuestJournalState extends State<QuestJournal> {
                     label: const Text('Take photo'),
                   ),
               ],
+            ),
+            const Divider(height: 32),
+            // Placeholder: will turn the quest + its photos/notes into a post.
+            OutlinedButton.icon(
+              key: const Key('instagram_post_button'),
+              onPressed: () => showComingSoon(context, 'Turning quests into Instagram posts'),
+              icon: const Icon(Icons.ios_share),
+              label: const Text('Make an Instagram post'),
             ),
           ],
         ),

@@ -82,6 +82,8 @@ String timeSpentText(WidgetTester tester) =>
 final tinyPng = base64Decode(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
 
+String textOf(WidgetTester tester, String key) => tester.widget<Text>(find.byKey(Key(key))).data!;
+
 String counter(WidgetTester tester) =>
     tester.widget<Text>(find.byKey(const Key('completed_count'))).data!;
 
@@ -308,7 +310,7 @@ void main() {
   });
 
   group('Bottom bar (signed in)', () {
-    testWidgets('switches between Quest, History and Account', (tester) async {
+    testWidgets('switches between Quest, History, Rewards and Account', (tester) async {
       await startLoggedIn(tester, quests: 1);
       expect(selectedTab(tester), 0);
 
@@ -316,8 +318,12 @@ void main() {
       expect(selectedTab(tester), 1);
       expect(find.byKey(const Key('quest_history_screen')), findsOneWidget);
 
-      await tapAndSettle(tester, navItem('Account'));
+      await tapAndSettle(tester, navItem('Rewards'));
       expect(selectedTab(tester), 2);
+      expect(find.byKey(const Key('rewards_screen')), findsOneWidget);
+
+      await tapAndSettle(tester, navItem('Account'));
+      expect(selectedTab(tester), 3);
       expect(find.byKey(const Key('account_screen')), findsOneWidget);
 
       await tapAndSettle(tester, navItem('Quest'));
@@ -329,7 +335,7 @@ void main() {
       await startLoggedIn(tester);
       tester.state<HomeShellState>(find.byType(HomeShell)).selectTab(HomeTab.account);
       await tester.pumpAndSettle();
-      expect(selectedTab(tester), 2);
+      expect(selectedTab(tester), 3);
     });
 
     testWidgets('empty history links to the Quest tab', (tester) async {
@@ -462,7 +468,7 @@ void main() {
       await tapAndSettle(tester, find.byKey(const Key('save_account_button')));
 
       expect(find.byKey(const Key('account_screen')), findsOneWidget);
-      expect(selectedTab(tester), 2);
+      expect(selectedTab(tester), 3);
       expect(find.text('G'), findsOneWidget);
       expect(backend.users[state.account!.id]!['name'], 'G');
     });
@@ -612,6 +618,54 @@ void main() {
       await tapAndSettle(tester, find.byKey(const Key('confirm_delete_account')));
       expect(find.textContaining('needs a connection'), findsOneWidget);
       expect(state.isLoggedIn, isTrue);
+    });
+  });
+
+  group('Rewards and sharing', () {
+    testWidgets('the Rewards tab shows points, level, streak and badges', (tester) async {
+      final user = backend.addUser(prefs: Map.of(savedPrefs));
+      final id = user['id'] as String;
+      backend.addQuest(id, title: 'Done One', feedback: {'completed': true, 'rating': 5});
+      backend.addQuest(id, title: 'Done Two', feedback: {'completed': true, 'rating': 4});
+      await secure.write('session', jsonEncode(backend.sessionFor(id)));
+      useTallScreen(tester);
+      final state = newState();
+      await state.restore();
+      await state.sync();
+      await tester.pumpWidget(SidequestApp(state: state));
+      await tester.pumpAndSettle();
+
+      await tapAndSettle(tester, navItem('Rewards'));
+      expect(textOf(tester, 'points_total'), '20');
+      expect(textOf(tester, 'level_name'), 'Level 1 · Homebody');
+      expect(find.text('30 points to Stroller'), findsOneWidget);
+      expect(find.byKey(const Key('badge_first_quest')), findsOneWidget);
+      expect(find.text('Done One'), findsOneWidget); // recent points list
+      expect(backend.requests, contains('GET /users/$id/rewards'));
+    });
+
+    testWidgets('rewards stay visible offline (last saved copy)', (tester) async {
+      final user = backend.addUser(prefs: Map.of(savedPrefs));
+      final id = user['id'] as String;
+      backend.addQuest(id, title: 'Done One', feedback: {'completed': true, 'rating': 5});
+      await secure.write('session', jsonEncode(backend.sessionFor(id)));
+      useTallScreen(tester);
+      final first = newState();
+      await first.restore();
+      await first.loadRewards();
+      expect(first.rewards!.points, 10);
+
+      backend.online = false;
+      await startApp(tester);
+      await tapAndSettle(tester, navItem('Rewards'));
+      expect(textOf(tester, 'points_total'), '10');
+    });
+
+    testWidgets('a quest can be turned into an Instagram post (button only for now)', (tester) async {
+      await startLoggedIn(tester);
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      await tapAndSettle(tester, find.byKey(const Key('instagram_post_button')));
+      expect(find.textContaining('Instagram posts is coming soon'), findsOneWidget);
     });
   });
 }

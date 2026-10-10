@@ -6,8 +6,9 @@ import '../widgets/sync_banner.dart';
 import 'account/account_screen.dart';
 import 'history/quest_history_screen.dart';
 import 'quest/quest_generator_screen.dart';
+import 'rewards/rewards_screen.dart';
 
-/// The signed-in area: three tabs switched with the bottom navigation bar.
+/// The signed-in area: four tabs switched with the bottom navigation bar.
 ///
 /// An [IndexedStack] keeps every tab alive, so each one keeps its scroll
 /// position and state when you switch away and back.
@@ -26,12 +27,18 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => HomeShellState();
 }
 
-enum HomeTab { quest, history, account }
+enum HomeTab { quest, history, rewards, account }
 
 class HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   late int _index = widget.initialTab.index;
 
-  void selectTab(HomeTab tab) => setState(() => _index = tab.index);
+  void selectTab(HomeTab tab) => _select(tab.index);
+
+  void _select(int index) {
+    setState(() => _index = index);
+    // Fresh points every time the Rewards tab opens.
+    if (index == HomeTab.rewards.index) AppScope.read(context).loadRewards();
+  }
 
   @override
   void initState() {
@@ -66,6 +73,7 @@ class HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
                 children: const [
                   QuestGeneratorScreen(),
                   QuestHistoryScreen(),
+                  RewardsScreen(),
                   AccountScreen(),
                 ],
               ),
@@ -76,7 +84,7 @@ class HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       bottomNavigationBar: NavigationBar(
         key: const Key('bottom_nav'),
         selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
+        onDestinationSelected: _select,
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.explore_outlined),
@@ -87,6 +95,11 @@ class HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             icon: Icon(Icons.history_outlined),
             selectedIcon: Icon(Icons.history),
             label: 'History',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.emoji_events_outlined),
+            selectedIcon: Icon(Icons.emoji_events),
+            label: 'Rewards',
           ),
           NavigationDestination(
             icon: Icon(Icons.person_outline),

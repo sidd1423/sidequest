@@ -28,7 +28,7 @@ Future<void> main() async {
 ///      |                        |
 ///      +-----------+------------+
 ///            v
-///   HomeShell  - bottom bar:  Quest | History | Account
+///   HomeShell  - bottom bar:  Quest | History | Rewards | Account
 ///                               |        |         |
 ///                               |   Quest detail   Edit account
 ///                               |                  Log out -> Log in

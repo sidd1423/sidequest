@@ -137,6 +137,33 @@ class FakeBackend {
     if (segments.length < 3 || segments[0] != 'users') return _error(404, 'Not found');
     if (segments[1] != userId) return _error(403, 'You can only access your own data');
 
+    if (segments[2] == 'rewards') {
+      // Simplified stand-in for backend/rewards.py: 10 points per completed quest.
+      final done = (quests[userId] ?? []).where((q) => q['status'] == 'completed').toList();
+      final points = done.length * 10;
+      return _json({
+        'points': points,
+        'level': points >= 50 ? 2 : 1,
+        'level_name': points >= 50 ? 'Stroller' : 'Homebody',
+        'level_floor': points >= 50 ? 50 : 0,
+        'next_level_at': points >= 50 ? 150 : 50,
+        'next_level_name': points >= 50 ? 'Wanderer' : 'Stroller',
+        'current_streak': done.isEmpty ? 0 : 1,
+        'best_streak': done.isEmpty ? 0 : 1,
+        'completed': done.length,
+        'minutes_outside': 0,
+        'photos': 0,
+        'badges': [
+          {'id': 'first_quest', 'name': 'First steps', 'description': 'Complete your first quest',
+           'earned': done.isNotEmpty, 'progress': done.isEmpty ? 0 : 1, 'goal': 1},
+        ],
+        'recent': [
+          for (final q in done)
+            {'quest_id': q['id'], 'title': (q['quest'] as Map<String, dynamic>)['title'], 'points': 10,
+             'reasons': ['+10 easy quest'], 'date': q['created_at']},
+        ],
+      });
+    }
     if (segments[2] == 'stats') {
       final list = quests[userId] ?? [];
       return _json({

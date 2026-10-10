@@ -35,6 +35,12 @@ first if changes haven't synced). Logic: `lib/data/app_state.dart`.
 - Completing a quest removes it from the Quest tab (it's in History). An
   unfinished one stays until you generate another. The current quest survives
   app restarts.
+- **Rewards** tab: points, level (Homebody -> Legend), day streak, badges
+  and what earned each quest's points. Points come from the server
+  (`backend/rewards.py`): 10/20/35/50 by difficulty, +1 per minute outside
+  (max 30), +5 photo, +2 note, +5 for trying, +10 per streak day. The last
+  copy is kept for offline use.
+- The quest log has a **Make an Instagram post** button - a placeholder for now.
 - **Account > Delete account** (needs your password and a connection) deletes
   everything on the server and the device.
 - The quest card appears only after tapping **Generate**, with the
@@ -48,11 +54,12 @@ Log in  <──>  Sign up ──▶ Set up your quests   auth screens - no botto
    │     (no preferences yet?) ──▶ │
    └──── Log in ──────── Start questing ─┐    (back stack cleared)
                                      ▼
-            ┌──────────── bottom bar ────────────┐
-            │   Quest   │   History   │  Account  │
-            └───────────┴──────┬──────┴─────┬─────┘
-                               ▼            ├─▶ Edit account (Save -> back)
-                         Quest detail       └─▶ Log out -> Log in (stack cleared)
+            ┌──────────────── bottom bar ────────────────┐
+            │  Quest  │  History  │  Rewards  │  Account  │
+            └─────────┴─────┬─────┴───────────┴─────┬─────┘
+                            ▼                       ├─▶ Edit account (Save -> back)
+                      Quest detail                  ├─▶ Log out -> Log in (stack cleared)
+                                                    └─▶ Delete account -> Log in
 ```
 
 | Screen | File | Reached from |
@@ -63,6 +70,7 @@ Log in  <──>  Sign up ──▶ Set up your quests   auth screens - no botto
 | Quest generator (tab) | `lib/screens/quest/quest_generator_screen.dart` (+ `quest_card.dart`, `quest_feedback_form.dart`) | bottom bar (default tab) |
 | Quest history (tab) | `lib/screens/history/quest_history_screen.dart` | bottom bar |
 | Quest detail | `lib/screens/history/quest_detail_screen.dart` | tap a quest in History |
+| Rewards (tab) | `lib/screens/rewards/rewards_screen.dart` | bottom bar |
 | Account (tab) | `lib/screens/account/account_screen.dart` | bottom bar |
 | Edit account | `lib/screens/account/edit_account_screen.dart` | Account > Edit account |
 

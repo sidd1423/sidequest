@@ -118,6 +118,36 @@ def delete_user_data(user_id: str) -> None:
             conn.execute("DELETE FROM quest_logs WHERE user_id = ?", (user_id,))
 
 
+def feedback_rows(user_id: str) -> list[tuple[int, Quest, FeedbackIn, datetime]]:
+    """(quest id, quest, feedback, when the feedback was given) for every rated quest."""
+    with connect() as conn:
+        rows = conn.execute(
+            """SELECT id, data, feedback, COALESCE(feedback_at, created_at) AS at FROM quests
+               WHERE user_id = ? AND feedback IS NOT NULL ORDER BY at""",
+            (user_id,),
+        ).fetchall()
+    out = []
+    for r in rows:
+        when = datetime.fromisoformat(r["at"])
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        out.append((r["id"], Quest.model_validate_json(r["data"]), FeedbackIn.model_validate_json(r["feedback"]), when))
+    return out
+
+
+def journal_counts(user_id: str) -> dict[int, tuple[int, int]]:
+    """quest id -> (photos, notes) in the quest log."""
+    with connect() as conn:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'quest_logs'").fetchone():
+            return {}
+        rows = conn.execute(
+            """SELECT quest_id, SUM(kind = 'photo') AS photos, SUM(kind = 'note') AS notes
+               FROM quest_logs WHERE user_id = ? GROUP BY quest_id""",
+            (user_id,),
+        ).fetchall()
+    return {r["quest_id"]: (r["photos"] or 0, r["notes"] or 0) for r in rows}
+
+
 def quest_stats(user_id: str) -> dict[str, int]:
     """Totals for the Quest screen counter."""
     with connect() as conn:

@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import auth, db, history, journal, library, retrieval, taste as taste_mod
+from . import auth, db, history, journal, library, retrieval, rewards, taste as taste_mod
 from .llm import GemmaClient, LLMClient, LLMError
 from .quest_generator import generate_quest
 from .schemas import (
@@ -287,3 +287,9 @@ def read_photo(log_id: int, user_id: str = UserId) -> Response:
 @app.delete("/users/{user_id}/logs/{client_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_log(client_id: str, user_id: str = UserId) -> None:
     journal.delete(user_id, client_id)  # already gone is fine (offline retries)
+
+
+@app.get("/users/{user_id}/rewards", response_model=rewards.Rewards)
+def read_rewards(user_id: str = UserId) -> rewards.Rewards:
+    """Points, level, streaks and badges (see backend/rewards.py for the rules)."""
+    return rewards.compute(user_id)

@@ -667,6 +667,7 @@ void main() {
       useTallScreen(tester);
       final first = newState();
       await first.restore();
+      await first.sync(); // profile cached too, or the app would open on the preferences setup screen
       await first.loadRewards();
       expect(first.rewards!.points, 10);
 

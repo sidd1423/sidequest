@@ -80,15 +80,15 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
     final wasExtended = state.streak.extendedToday;
     await state.sendFeedback(quest.id, feedback); // saved on the device; sent now or when online
     final synced = state.isOnline ? '' : " It'll sync when you're back online.";
+    final message = feedback.completed
+        ? 'Quest complete! That\'s ${state.completedCount} so far - it\'s in History now.$synced'
+        : 'Thanks! Your next quest will take this into account.$synced';
+    // First completed quest today: "N day streak!" - before the snackbar, so the
+    // snackbar doesn't cover the celebration's Continue button.
+    if (mounted && feedback.completed) await StreakCelebrationScreen.showIfExtended(context, wasExtended: wasExtended);
     messenger
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(
-        content: Text(feedback.completed
-            ? 'Quest complete! That\'s ${state.completedCount} so far - it\'s in History now.$synced'
-            : 'Thanks! Your next quest will take this into account.$synced'),
-      ));
-    // First completed quest today: "N day streak!"
-    if (mounted && feedback.completed) await StreakCelebrationScreen.showIfExtended(context, wasExtended: wasExtended);
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override

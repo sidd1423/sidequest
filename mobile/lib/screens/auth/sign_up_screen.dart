@@ -61,8 +61,11 @@ class SignUpScreen extends StatelessWidget {
           child: const Text('Create account'),
         ),
         const SizedBox(height: 16),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
+        // Wrap (not Row) so this line wraps instead of overflowing on narrow
+        // screens or with large text.
+        Wrap(
+          alignment: WrapAlignment.center,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             const Text('Already have an account?'),
             TextButton(

@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, status
 
-from . import db, library, retrieval
+from . import db, history, library, retrieval
 from .llm import GemmaClient, LLMClient, LLMError
 from .quest_generator import generate_quest
 from .schemas import (
@@ -37,6 +37,10 @@ async def lifespan(_: FastAPI):
         library.init_library()  # create/migrate/seed data/quest_library.db
     except Exception as exc:  # the app still works without the library
         log.warning("Quest library unavailable: %s", exc)
+    try:
+        history.init_history()  # create data/user_history.db + copy logged quests from the library
+    except Exception as exc:
+        log.warning("User history unavailable: %s", exc)
     yield
 
 
@@ -121,11 +125,16 @@ def create_quest(
     prefs = PreferencesIn.model_validate(profile.model_dump(exclude={"user_id", "created_at", "updated_at"}))
     # Feedback is empty on a user's first run; examples come from the Tiger
     # library (so even new users get them) or, failing that, past liked quests.
-    history = db.feedback_history(user_id) or None
-    examples = find_examples(user_id, prefs, history, retriever) or None
+    feedback = db.feedback_history(user_id) or None
+    examples = find_examples(user_id, prefs, feedback, retriever) or None
+    try:  # the user's last 10 quests + how they went (data/user_history.db)
+        recent = history.recent(user_id)
+    except Exception as exc:
+        log.warning("Couldn't read user history: %s", exc)
+        recent = []
 
     try:
-        quest = generate_quest(prefs, examples, history, llm=llm)
+        quest = generate_quest(prefs, examples, feedback, recent_quests=recent, llm=llm)
     except LLMError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     record = db.add_quest(user_id, quest, model=getattr(llm, "model", ""))
@@ -133,6 +142,10 @@ def create_quest(
         library.add_generated(record.id, user_id, quest, model=record.model)
     except Exception as exc:
         log.warning("Couldn't add quest %s to the library: %s", record.id, exc)
+    try:  # and to the user's history (keeps their last 10)
+        history.add_quest(record.id, user_id, quest, model=record.model)
+    except Exception as exc:
+        log.warning("Couldn't add quest %s to the user history: %s", record.id, exc)
     return record
 
 
@@ -150,4 +163,8 @@ def give_feedback(feedback: FeedbackIn, quest_id: int, user_id: str = UserId) ->
         library.record_feedback(quest_id, feedback)
     except Exception as exc:
         log.warning("Couldn't store feedback for quest %s in the library: %s", quest_id, exc)
+    try:
+        history.record_feedback(quest_id, feedback)
+    except Exception as exc:
+        log.warning("Couldn't store feedback for quest %s in the user history: %s", quest_id, exc)
     return record

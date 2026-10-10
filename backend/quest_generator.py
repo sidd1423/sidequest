@@ -14,7 +14,7 @@ from typing import Any, Sequence
 from pydantic import ValidationError
 
 from .llm import GemmaClient, LLMClient, LLMError
-from .schemas import MIN_QUEST_MINUTES, FeedbackEntry, PreferencesIn, Quest, QuestExample
+from .schemas import MIN_QUEST_MINUTES, FeedbackEntry, PastQuest, PreferencesIn, Quest, QuestExample
 
 MAX_ATTEMPTS = 3
 
@@ -61,10 +61,45 @@ def _feedback_block(feedback: Sequence[FeedbackEntry]) -> str:
     return "\n".join(lines)
 
 
+def _recent_block(recent: Sequence[PastQuest]) -> str:
+    """The user's recent sidequests grouped by how they went."""
+    def line(q: PastQuest) -> str:
+        bits = [f"{q.category}", f"{q.duration_minutes} min"]
+        if q.tags:
+            bits.append("tags: " + ", ".join(q.tags))
+        extra = []
+        if q.rating:
+            extra.append(f"rated {q.rating}/5")
+        if q.time_logged_minutes:
+            extra.append(f"took {q.time_logged_minutes} min")
+        if q.comment:
+            extra.append(f'said: "{q.comment}"')
+        tail = f" - {'; '.join(extra)}" if extra else ""
+        return f"- {q.title} ({'; '.join(bits)}){tail}"
+
+    groups = [
+        ("Loved (rated 4-5) - lean toward this kind of thing, but make something NEW",
+         [q for q in recent if q.loved]),
+        ("DISLIKED (rated 1-2) - make the new quest clearly DIFFERENT from these: a different kind of "
+         "activity, not just a new name", [q for q in recent if q.disliked]),
+        ("Rated OK (3)", [q for q in recent if q.completed and q.rating == 3]),
+        ("Skipped - probably not appealing; try a different angle",
+         [q for q in recent if q.status.value == "skipped"]),
+        ("Suggested but not done yet - do not repeat", [q for q in recent if q.status.value == "suggested"]),
+    ]
+    out = []
+    for heading, items in groups:
+        if items:
+            out.append(f"{heading}:")
+            out.extend(line(q) for q in items)
+    return "\n".join(out)
+
+
 def build_prompt(
     profile: PreferencesIn,
     retrieved_examples: Sequence[QuestExample] | None = None,
     feedback_history: Sequence[FeedbackEntry] | None = None,
+    recent_quests: Sequence[PastQuest] | None = None,
 ) -> str:
     minutes = profile.availability.duration_minutes
     parts = [
@@ -99,14 +134,20 @@ def build_prompt(
             _examples_block(retrieved_examples),
         ]
 
-    if feedback_history:
+    if recent_quests:
+        parts += [
+            "",
+            f"## This user's last {len(recent_quests)} sidequests (newest first) - never repeat any of them",
+            _recent_block(recent_quests),
+        ]
+    elif feedback_history:
         parts += [
             "",
             "## Feedback on previous quests (lean toward what they liked, away from what they skipped or rated low)",
             _feedback_block(feedback_history),
         ]
 
-    if not feedback_history:
+    if not recent_quests and not feedback_history:
         parts += ["", "This is the user's first quest - pick something easy to say yes to that clearly matches "
                   "their interests."]
 
@@ -159,7 +200,21 @@ def parse_quest(raw: str) -> Quest:
     raise last_error  # type: ignore[misc]
 
 
-def _violations(quest: Quest, profile: PreferencesIn) -> list[str]:
+def _norm_title(t: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", t.lower()).strip()
+
+
+def too_similar_to_disliked(quest: Quest, disliked: PastQuest) -> bool:
+    """Same kind of activity as a quest the user disliked: same category and
+    at least two shared tags, or the same title."""
+    if _norm_title(quest.title) == _norm_title(disliked.title):
+        return True
+    tags = set(quest.tags)
+    category = next((t for t in quest.tags if t == disliked.category), None)
+    return category is not None and len(tags & set(disliked.tags)) >= 2
+
+
+def _violations(quest: Quest, profile: PreferencesIn, recent: Sequence[PastQuest] = ()) -> list[str]:
     problems = []
     available = profile.availability.duration_minutes
     if quest.estimated_minutes > available:
@@ -168,6 +223,17 @@ def _violations(quest: Quest, profile: PreferencesIn) -> list[str]:
         problems.append(f"estimated_minutes must be at least {MIN_QUEST_MINUTES}")
     if quest.setting.value == "indoor":
         problems.append("the quest must take place outdoors")
+    for past in recent:
+        if _norm_title(quest.title) == _norm_title(past.title):
+            problems.append(f"'{quest.title}' repeats one of the user's recent quests - create a new one")
+            break
+    for past in recent:
+        if past.disliked and too_similar_to_disliked(quest, past):
+            problems.append(
+                f"too similar to '{past.title}', which the user rated {past.rating}/5 - "
+                "pick a clearly different kind of activity"
+            )
+            break
     return problems
 
 
@@ -176,15 +242,20 @@ def generate_quest(
     retrieved_examples: Sequence[QuestExample] | None = None,
     feedback_history: Sequence[FeedbackEntry] | None = None,
     *,
+    recent_quests: Sequence[PastQuest] | None = None,
     llm: LLMClient | None = None,
 ) -> Quest:
     """Generate one sidequest tailored to `profile`.
 
-    `retrieved_examples` and `feedback_history` come from quests the user has
-    completed, so both are optional (and empty) on a user's first run.
+    Everything after `profile` is optional - a brand-new user has no history:
+      retrieved_examples  similar quests from the quest library
+      feedback_history    feedback on past quests (used if recent_quests isn't given)
+      recent_quests       the user's last 10 quests from the user history database;
+                          the new quest must not repeat them or resemble disliked ones
     """
     llm = llm or GemmaClient()
-    prompt = build_prompt(profile, retrieved_examples, feedback_history)
+    recent_quests = list(recent_quests or [])
+    prompt = build_prompt(profile, retrieved_examples, feedback_history, recent_quests)
 
     last_error = ""
     for _ in range(MAX_ATTEMPTS):
@@ -201,7 +272,7 @@ def generate_quest(
             last_error = str(exc).splitlines()[0][:300]
             log.warning("Unusable model output (%s). Start of output: %r", last_error, raw[:500])
             continue
-        problems = _violations(quest, profile)
+        problems = _violations(quest, profile, recent_quests)
         if problems:
             last_error = "; ".join(problems)
             continue

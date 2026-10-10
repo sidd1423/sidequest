@@ -24,6 +24,14 @@ QUEST = {
 }
 
 
+DIFFERENT_QUEST = {
+    **QUEST,
+    "title": "Neighbourhood Bench Sketch",
+    "summary": "Find a bench nearby and sketch the street scene in front of you for ten minutes.",
+    "tags": ["art", "drawing", "quiet"],
+}
+
+
 class FakeLLM:
     model = "fake-gemma"
 
@@ -204,12 +212,12 @@ def test_full_loop_first_run_then_history(api):
 def test_low_rated_quest_is_feedback_not_example(api):
     client, llm = api
     client.put("/users/gowtham/preferences", json=VALID)
-    llm.responses += [json.dumps(QUEST), json.dumps(QUEST)]
+    llm.responses += [json.dumps(QUEST), json.dumps(DIFFERENT_QUEST)]
     qid = client.post("/users/gowtham/quests").json()["id"]
     client.post(f"/users/gowtham/quests/{qid}/feedback", json={"completed": True, "rating": 2})
-    client.post("/users/gowtham/quests")
+    assert client.post("/users/gowtham/quests").status_code == 201
     assert "Example quests" not in llm.prompts[-1]
-    assert "rated 2/5" in llm.prompts[-1]
+    assert "rated 2/5" in llm.prompts[-1] and "DISLIKED" in llm.prompts[-1]
 
 
 def test_feedback_validation(api):

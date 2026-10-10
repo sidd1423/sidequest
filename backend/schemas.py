@@ -297,3 +297,31 @@ class QuestRecord(BaseModel):
     feedback: FeedbackIn | None = None
     created_at: datetime
     model: str = ""
+
+
+class PastQuest(BaseModel):
+    """One of the user's previous sidequests (from the user history database),
+    used to steer the next one - more like the loved ones, away from the
+    disliked ones, and never a repeat."""
+
+    app_quest_id: int | None = None
+    title: str
+    quest_text: str
+    category: str = "general"
+    duration_minutes: int
+    difficulty: Difficulty
+    tags: list[str] = Field(default_factory=list)
+    status: QuestStatus = QuestStatus.SUGGESTED
+    completed: bool | None = None
+    rating: int | None = Field(None, ge=1, le=5)
+    comment: str = ""
+    time_logged_minutes: int = 0
+    created_at: datetime | None = None
+
+    @property
+    def loved(self) -> bool:
+        return bool(self.completed) and (self.rating or 0) >= 4
+
+    @property
+    def disliked(self) -> bool:
+        return bool(self.completed) and self.rating is not None and self.rating <= 2

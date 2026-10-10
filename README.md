@@ -66,6 +66,26 @@ copy .env.example .env
 Then set `GEMMA_API_KEY` in `.env` (free key: https://aistudio.google.com/apikey).
 To run Gemma locally with Ollama instead, see the commented lines in `.env.example`.
 
+## User history (`data/user_history.db`)
+
+A second database that remembers each user's recent sidequests and how they
+went, so the next one is steered by them:
+
+- Every generated quest is added (and still added to the quest library too).
+- Each user keeps their **10 most recent** quests; older ones are pruned,
+  except quests with logged time, which are always kept.
+- On startup, every quest-library entry with `time_logged_minutes > 0` is
+  copied in (`copied_from_library = 1`).
+- The last 10 go to Gemma grouped as *loved* (4-5 stars), *disliked*
+  (1-2 stars), *rated OK*, *skipped* and *not done yet*. Gemma must not repeat
+  any of them, and a new quest that is too close to a disliked one (same
+  category + 2 shared tags, or the same title) is rejected and regenerated.
+
+Table `user_quest_history`: user_id, app_quest_id, title, quest_text,
+category, duration_minutes, difficulty, tags, quest_json, model, status,
+completed, rating, feedback_comment, time_logged_minutes, created_at,
+feedback_at, copied_from_library. Git-ignored (user data).
+
 ## Example-quest library
 
 Gemma gets the 3 example quests most similar to the user's profile.

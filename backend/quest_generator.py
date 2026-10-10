@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
-from typing import Sequence
+from typing import Any, Sequence
 
 from pydantic import ValidationError
 
@@ -12,6 +13,8 @@ from .llm import GemmaClient, LLMClient, LLMError
 from .schemas import FeedbackEntry, PreferencesIn, Quest
 
 MAX_ATTEMPTS = 3
+
+log = logging.getLogger("sidequest.quests")
 
 QUEST_JSON_SHAPE = """{
   "title": "short, catchy quest name",
@@ -100,17 +103,44 @@ def build_prompt(
     return "\n".join(parts)
 
 
-_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
+_THINKING = re.compile(r"<(think|thinking|thought)>.*?</\1>", re.DOTALL | re.IGNORECASE)
+_DECODER = json.JSONDecoder()
+
+
+def _json_objects(text: str) -> list[Any]:
+    """Every top-level JSON object embedded anywhere in `text`."""
+    found, i = [], text.find("{")
+    while i != -1:
+        try:
+            obj, end = _DECODER.raw_decode(text, i)
+        except json.JSONDecodeError:
+            i = text.find("{", i + 1)
+            continue
+        if isinstance(obj, dict):
+            found.append(obj)
+        i = text.find("{", end)
+    return found
 
 
 def parse_quest(raw: str) -> Quest:
-    """Extract and validate the JSON quest from a model response."""
-    text = _FENCE.sub("", raw.strip())
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end == -1:
+    """Extract and validate the quest JSON from a model response.
+
+    Tolerates markdown fences, chatty preambles, and visible reasoning blocks;
+    if several JSON objects appear, the last valid one wins (the final answer).
+    """
+    text = _THINKING.sub("", raw)
+    candidates = _json_objects(text)
+    if not candidates:
         raise ValueError("No JSON object found in model response")
-    data = json.loads(text[start : end + 1])
-    return Quest.model_validate(data)
+    last_error: Exception | None = None
+    for obj in reversed(candidates):
+        if "quest" in obj and isinstance(obj["quest"], dict):  # {"quest": {...}} wrapper
+            obj = obj["quest"]
+        try:
+            return Quest.model_validate(obj)
+        except ValidationError as exc:
+            last_error = exc
+    raise last_error  # type: ignore[misc]
 
 
 def _violations(quest: Quest, profile: PreferencesIn) -> list[str]:
@@ -156,6 +186,7 @@ def generate_quest(
             quest = parse_quest(raw)
         except (ValueError, ValidationError) as exc:
             last_error = str(exc).splitlines()[0][:300]
+            log.warning("Unusable model output (%s). Start of output: %r", last_error, raw[:500])
             continue
         problems = _violations(quest, profile)
         if problems:
@@ -163,4 +194,7 @@ def generate_quest(
             continue
         return quest
 
-    raise LLMError(f"Model didn't return a valid quest after {MAX_ATTEMPTS} attempts ({last_error})")
+    raise LLMError(
+        f"Model didn't return a valid quest after {MAX_ATTEMPTS} attempts ({last_error}). "
+        "The backend terminal shows what the model sent."
+    )

@@ -214,3 +214,47 @@ def test_llm_failure_returns_502(api):
     client.put("/users/gowtham/preferences", json=VALID)
     llm.responses += ["x", "y", "z"]
     assert client.post("/users/gowtham/quests").status_code == 502
+
+
+# ---------------------------------------------------------------------------
+# Robust parsing of real-world model output
+# ---------------------------------------------------------------------------
+
+def test_parses_after_visible_thinking_with_braces():
+    raw = (
+        "<thought>The user likes {nature}. Maybe {\"title\": \"draft\"} ... let me refine.</thought>\n"
+        "Here is your quest:\n```json\n" + json.dumps(QUEST) + "\n```\nEnjoy!"
+    )
+    assert parse_quest(raw).title == QUEST["title"]
+
+
+def test_last_valid_object_wins():
+    raw = json.dumps({"title": "x"}) + "\n" + json.dumps(QUEST)
+    assert parse_quest(raw).title == QUEST["title"]
+
+
+def test_unwraps_quest_key():
+    assert parse_quest(json.dumps({"quest": QUEST})).title == QUEST["title"]
+
+
+def test_client_handles_list_content_and_empty(monkeypatch):
+    body = {"choices": [{"message": {"content": [{"type": "text", "text": "{\"a\": 1}"}]}, "finish_reason": "stop"}]}
+    monkeypatch.setattr("backend.llm.requests.post", lambda *a, **k: FakeResp(200, body))
+    assert GemmaClient(base_url="https://x.test", api_key="k").complete("p") == '{"a": 1}'
+
+    empty = {"choices": [{"message": {"content": None}, "finish_reason": "length"}]}
+    monkeypatch.setattr("backend.llm.requests.post", lambda *a, **k: FakeResp(200, empty))
+    with pytest.raises(LLMError, match="GEMMA_MAX_TOKENS"):
+        GemmaClient(base_url="https://x.test", api_key="k").complete("p")
+
+
+def test_client_sends_large_token_budget(monkeypatch):
+    seen = {}
+
+    def fake_post(url, json, headers, timeout):
+        seen.update(json)
+        return FakeResp(200, {"choices": [{"message": {"content": "ok"}}]})
+
+    monkeypatch.setattr("backend.llm.requests.post", fake_post)
+    GemmaClient(base_url="https://x.test", api_key="k").complete("p")
+    assert seen["max_tokens"] >= 4096

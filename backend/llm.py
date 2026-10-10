@@ -11,13 +11,19 @@ Configure with GEMMA_BASE_URL, GEMMA_API_KEY and GEMMA_MODEL in .env.
 
 from __future__ import annotations
 
+import logging
 import os
-from typing import Protocol
+from typing import Any, Protocol
 
 import requests
 
 DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 DEFAULT_MODEL = "gemma-4-26b-a4b-it"
+# Gemma 4 "thinks" before answering and those tokens count toward the limit,
+# so leave plenty of room for the final JSON.
+DEFAULT_MAX_TOKENS = 8192
+
+log = logging.getLogger("sidequest.llm")
 
 
 class LLMError(RuntimeError):
@@ -42,6 +48,7 @@ class GemmaClient:
         self.api_key = api_key if api_key is not None else os.getenv("GEMMA_API_KEY", "")
         self.model = model or os.getenv("GEMMA_MODEL") or DEFAULT_MODEL
         self.timeout = timeout or float(os.getenv("GEMMA_TIMEOUT", "90"))
+        self.max_tokens = int(os.getenv("GEMMA_MAX_TOKENS", DEFAULT_MAX_TOKENS))
 
     def complete(self, prompt: str, *, temperature: float = 0.9) -> str:
         # Gemma has no separate system role on some hosts (e.g. Google AI Studio),
@@ -53,7 +60,7 @@ class GemmaClient:
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": temperature,
-            "max_tokens": 1200,
+            "max_tokens": self.max_tokens,
         }
         try:
             resp = requests.post(
@@ -68,6 +75,26 @@ class GemmaClient:
             raise LLMError(f"Inference API error {resp.status_code}: {resp.text[:300]}")
 
         try:
-            return resp.json()["choices"][0]["message"]["content"] or ""
-        except (ValueError, KeyError, IndexError, TypeError) as exc:
+            choice = resp.json()["choices"][0]
+            content = _text(choice["message"].get("content"))
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
             raise LLMError(f"Unexpected response shape from inference API: {resp.text[:300]}") from exc
+
+        finish = choice.get("finish_reason")
+        log.info("model=%s finish_reason=%s chars=%d", self.model, finish, len(content))
+        log.debug("raw model output: %s", content[:2000])
+        if not content.strip():
+            hint = " (hit the token limit - raise GEMMA_MAX_TOKENS)" if finish == "length" else ""
+            raise LLMError(f"Model returned an empty answer{hint}")
+        return content
+
+
+def _text(content: Any) -> str:
+    """Content is usually a string, but some servers return a list of parts."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(p.get("text", "") if isinstance(p, dict) else str(p) for p in content)
+    return str(content)

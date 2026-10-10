@@ -6,6 +6,7 @@ Docs at:   http://localhost:8000/docs
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -17,6 +18,7 @@ from .quest_generator import generate_quest
 from .schemas import USER_ID_PATTERN, FeedbackIn, PreferencesIn, PreferencesOut, QuestRecord
 
 load_dotenv()
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
 
 @asynccontextmanager

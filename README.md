@@ -154,3 +154,9 @@ pytest
 
 pgvector tests are skipped unless `TEST_PG_URL` points at a Postgres with the
 `vector` extension (they create and drop a `quests_test` table).
+
+## Mobile app (Flutter)
+
+`mobile/` contains the Flutter app outline: Log in, Sign up, and a bottom bar
+with Quest generator, History (+ quest detail) and Account (+ edit account).
+Screens and navigation only - no functionality yet. See `mobile/README.md`.

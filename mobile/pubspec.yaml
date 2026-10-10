@@ -1,0 +1,19 @@
+name: sidequest
+description: "Sidequest - quick 5-30 minute outdoor quests to get you outside."
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+# No third-party packages yet - navigation uses Flutter's built-in Navigator.
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true

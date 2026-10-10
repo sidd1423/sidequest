@@ -6,7 +6,6 @@ Then this app:           streamlit run app.py
 
 from __future__ import annotations
 
-import re
 from enum import Enum
 
 import streamlit as st
@@ -17,7 +16,6 @@ from backend.schemas import (
     MAX_QUEST_MINUTES,
     MAX_TRAVEL_KM,
     MIN_QUEST_MINUTES,
-    USER_ID_PATTERN,
     AccessibilityNeed,
     CrowdLevel,
     Difficulty,
@@ -60,6 +58,30 @@ ss = st.session_state
 ss.setdefault("prefs", None)  # last preferences loaded from / saved to the backend
 ss.setdefault("form_version", 0)  # bump to re-seed widgets after loading
 ss.setdefault("last_saved", None)
+ss.setdefault("session", None)  # {"token": ..., "user": {...}} after logging in
+api_client.set_token(ss.session["token"] if ss.session else None)
+
+
+def start_session(session: dict) -> None:
+    ss.session = session
+    ss.prefs = None
+    ss.last_saved = None
+    ss.form_version += 1
+
+
+def end_session() -> None:
+    ss.session = None
+    ss.prefs = None
+    ss.last_saved = None
+    ss.form_version += 1
+
+
+def handle_backend_error(e: BackendError, prefix: str = "") -> None:
+    if e.status_code == 401:  # session expired or revoked
+        end_session()
+        st.warning("Your session expired - please log in again.")
+        st.rerun()
+    st.error(f"{prefix}{e}")
 
 
 def current_defaults() -> dict:
@@ -97,21 +119,46 @@ with st.sidebar:
             icon="⚠️",
         )
 
-    user_id = st.text_input(
-        "User ID",
-        key="user_id",
-        placeholder="e.g. gowtham",
-        help="3-64 characters: letters, numbers, _ . @ -",
-    ).strip()
-    valid_id = bool(re.fullmatch(USER_ID_PATTERN, user_id))
-    if user_id and not valid_id:
-        st.warning("Use 3-64 letters, numbers, or _ . @ -")
+    if ss.session is None:
+        log_in_tab, sign_up_tab = st.tabs(["Log in", "Sign up"])
+        with log_in_tab, st.form("log_in"):
+            email = st.text_input("Email", key="login_email")
+            password = st.text_input("Password", type="password", key="login_password")
+            if st.form_submit_button("Log in", disabled=not healthy, use_container_width=True):
+                try:
+                    start_session(api_client.log_in(email, password))
+                except BackendError as e:
+                    st.error(str(e))
+                else:
+                    st.rerun()
+        with sign_up_tab, st.form("sign_up"):
+            name = st.text_input("Name", key="signup_name")
+            email = st.text_input("Email", key="signup_email")
+            password = st.text_input("Password (8+ characters)", type="password", key="signup_password")
+            if st.form_submit_button("Create account", disabled=not healthy, use_container_width=True):
+                try:
+                    start_session(api_client.sign_up(name, email, password))
+                except BackendError as e:
+                    st.error(str(e))
+                else:
+                    st.rerun()
+    else:
+        account = ss.session["user"]
+        st.write(f"Logged in as **{account['name'] or account['email']}**")
+        st.caption(account["email"])
+        if st.button("Log out", use_container_width=True):
+            api_client.log_out()
+            end_session()
+            st.rerun()
+
+    user_id = ss.session["user"]["id"] if ss.session else ""
+    valid_id = bool(user_id)
 
     if st.button("Load saved preferences", disabled=not (healthy and valid_id), use_container_width=True):
         try:
             loaded = api_client.get_preferences(user_id)
         except BackendError as e:
-            st.error(str(e))
+            handle_backend_error(e)
         else:
             if loaded is None:
                 st.info("No saved preferences yet. Fill in the form to create them.")
@@ -269,7 +316,7 @@ with st.form("preferences"):
 
 def save_form() -> None:
     if not valid_id:
-        st.error("Enter a valid User ID in the sidebar before saving.")
+        st.error("Log in (sidebar) before saving.")
         return
     try:
         prefs = PreferencesIn(
@@ -294,12 +341,12 @@ def save_form() -> None:
     try:
         saved = api_client.save_preferences(user_id, prefs)
     except BackendError as e:
-        st.error(f"Couldn't save: {e}")
+        handle_backend_error(e, "Couldn't save: ")
         return
 
     ss.prefs = saved
     ss.last_saved = saved["updated_at"]
-    st.success(f"Preferences saved for **{user_id}**.", icon="💾")
+    st.success("Preferences saved.", icon="💾")
     with st.expander("What was sent to the backend"):
         st.json(saved)
 
@@ -389,7 +436,7 @@ def feedback_form(record: dict) -> None:
                     user_id, qid, completed, rating or None, comment.strip(), int(time_spent),
                 )
             except BackendError as e:
-                st.error(f"Couldn't send feedback: {e}")
+                handle_backend_error(e, "Couldn't send feedback: ")
             else:
                 st.toast("Thanks! Your next quest will take this into account.", icon="🙏")
                 st.rerun()
@@ -399,12 +446,12 @@ st.divider()
 st.header("🗺️ Your sidequest")
 
 if not (healthy and valid_id):
-    st.info("Enter your User ID in the sidebar (and save your preferences) to generate a sidequest.")
+    st.info("Log in or sign up in the sidebar (and save your preferences) to generate a sidequest.")
 else:
     try:
         quests = api_client.list_quests(user_id)
     except BackendError as e:
-        st.error(str(e))
+        handle_backend_error(e)
         quests = []
 
     st.caption("Uses your **saved** preferences - save the form first if you changed anything.")
@@ -413,7 +460,7 @@ else:
             try:
                 quests.insert(0, api_client.generate_quest(user_id))
             except BackendError as e:
-                st.error(f"Couldn't generate a quest: {e}")
+                handle_backend_error(e, "Couldn't generate a quest: ")
             else:
                 st.toast("New sidequest ready", icon="✨")
 

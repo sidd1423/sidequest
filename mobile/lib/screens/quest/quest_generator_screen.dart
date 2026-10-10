@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../../data/api_client.dart';
+import '../../data/app_scope.dart';
 import '../../models/generated_quest.dart';
 import '../../models/preference_options.dart';
-import '../../widgets/coming_soon.dart';
+import '../../models/quest_record.dart';
+import '../auth/auth_scaffold.dart' show AuthError;
 import 'quest_card.dart';
 import 'quest_feedback_form.dart';
 
@@ -13,7 +16,8 @@ import 'quest_feedback_form.dart';
 /// 3. Rate it under the card ("How did it go?").
 ///
 /// Interests, accessibility, surroundings and weather come from the profile
-/// (set at sign-up / Edit account). Placeholder quest content for now.
+/// (set at sign-up / Edit account). Generating needs a connection (Gemma runs
+/// on the server); rating works offline and syncs later.
 class QuestGeneratorScreen extends StatefulWidget {
   const QuestGeneratorScreen({super.key});
 
@@ -27,29 +31,37 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
   double _energy = 3;
   double _distanceKm = 1.0;
 
-  GeneratedQuest? _quest;
+  QuestRecord? _record;
   QuestFeedback? _feedback;
-  int _questCount = 0;
+  bool _generating = false;
+  String? _error;
   final _cardKey = GlobalKey();
 
-  void _generate() {
-    // TODO: POST /users/{id}/quests with these per-quest settings.
+  Future<void> _generate() async {
     setState(() {
-      _questCount++;
-      _feedback = null;
-      _quest = GeneratedQuest(
-        title: 'Sample Sidequest #$_questCount',
-        summary: 'A ${_difficultyLabel.toLowerCase()} $_minutes-minute quest within '
-            '${_distanceKm.toStringAsFixed(1)} km. The real quest will come from Gemma.',
-        steps: const ['Step outside', 'Follow the quest', 'Head back and rate it below'],
+      _generating = true;
+      _error = null;
+    });
+    try {
+      final record = await AppScope.read(context).generateQuest(QuestSettings(
         minutes: _minutes,
         difficulty: _difficulty,
         energy: _energy.round(),
         distanceKm: _distanceKm,
-        weatherBackup: 'If the weather turns, find a covered spot nearby and keep going.',
-        whyItFits: 'Placeholder - Gemma will explain why this suits you.',
-      );
-    });
+      ));
+      if (!mounted) return;
+      setState(() {
+        _record = record;
+        _feedback = null;
+      });
+    } on OfflineException catch (e) {
+      if (mounted) setState(() => _error = '${e.message} New quests need a connection - your history still works offline.');
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _error = "Couldn't get a quest: ${e.message}");
+    } finally {
+      if (mounted) setState(() => _generating = false);
+    }
+    if (_record == null || _error != null) return;
     // Bring the new card into view.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final cardContext = _cardKey.currentContext;
@@ -59,21 +71,28 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
     });
   }
 
-  String get _difficultyLabel =>
-      difficultyOptions.firstWhere((o) => o.value == _difficulty).label;
-
-  void _submitFeedback(QuestFeedback feedback) {
-    // TODO: POST /users/{id}/quests/{questId}/feedback
+  Future<void> _submitFeedback(QuestFeedback feedback) async {
+    final state = AppScope.read(context);
+    final messenger = ScaffoldMessenger.of(context);
     setState(() => _feedback = feedback);
-    ScaffoldMessenger.of(context)
+    await state.sendFeedback(_record!.id, feedback); // saved on the device; sent now or when online
+    messenger
       ..hideCurrentSnackBar()
-      ..showSnackBar(const SnackBar(content: Text('Thanks! Your next quest will take this into account.')));
+      ..showSnackBar(SnackBar(
+        content: Text(state.isOnline
+            ? 'Thanks! Your next quest will take this into account.'
+            : "Saved - it'll sync when you're back online."),
+      ));
   }
+
+  bool _isPending(int questId) =>
+      AppScope.of(context).quests.any((q) => q.id == questId && q.feedbackPending);
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final quest = _quest;
+    final record = _record;
+    final quest = record?.quest;
     Widget heading(String text) => Padding(
           padding: const EdgeInsets.only(top: 20, bottom: 8),
           child: Text(text, style: theme.textTheme.titleMedium),
@@ -85,8 +104,6 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
         key: const Key('quest_generator_screen'),
         padding: const EdgeInsets.all(16),
         children: [
-          const ComingSoonBanner(message: 'Layout only - quests are placeholders for now'),
-          const SizedBox(height: 16),
           Text('Got a few minutes?', style: theme.textTheme.headlineSmall),
           const SizedBox(height: 4),
           Text(
@@ -150,25 +167,35 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
           const SizedBox(height: 16),
           FilledButton.icon(
             key: const Key('generate_button'),
-            onPressed: _generate,
-            icon: const Icon(Icons.auto_awesome),
-            label: Text(quest == null ? 'Generate sidequest' : 'Generate another'),
+            onPressed: _generating ? null : _generate,
+            icon: _generating
+                ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.auto_awesome),
+            label: Text(_generating
+                ? 'Asking Gemma... (10-60 s)'
+                : quest == null
+                    ? 'Generate sidequest'
+                    : 'Generate another'),
           ),
+          if (_error != null) ...[
+            const SizedBox(height: 12),
+            AuthError(_error!, key: const Key('generate_error')),
+          ],
 
           // --- Result: only after Generate ------------------------------
-          if (quest != null) ...[
+          if (record != null && quest != null) ...[
             const SizedBox(height: 24),
             QuestCard(key: _cardKey, quest: quest),
             const SizedBox(height: 16),
             if (_feedback == null)
               QuestFeedbackForm(
                 // New key per quest so the form resets for each one.
-                key: ValueKey('feedback_form_$_questCount'),
+                key: ValueKey('feedback_form_${record.id}'),
                 estimatedMinutes: quest.minutes,
                 onSubmit: _submitFeedback,
               )
             else
-              _FeedbackSummary(feedback: _feedback!),
+              _FeedbackSummary(feedback: _feedback!, pending: _isPending(record.id)),
           ],
         ],
       ),
@@ -177,9 +204,10 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
 }
 
 class _FeedbackSummary extends StatelessWidget {
-  const _FeedbackSummary({required this.feedback});
+  const _FeedbackSummary({required this.feedback, required this.pending});
 
   final QuestFeedback feedback;
+  final bool pending;
 
   @override
   Widget build(BuildContext context) {
@@ -189,7 +217,8 @@ class _FeedbackSummary extends StatelessWidget {
     return Card(
       key: const Key('feedback_summary'),
       child: ListTile(
-        leading: const Icon(Icons.thumb_up_alt_outlined),
+        leading: Icon(pending ? Icons.cloud_upload_outlined : Icons.thumb_up_alt_outlined),
+        trailing: pending ? const Tooltip(message: 'Waiting to sync', child: Icon(Icons.schedule)) : null,
         title: Text(parts.join(' · ')),
         subtitle: Text(feedback.comment.isEmpty ? 'Thanks for the feedback!' : '"${feedback.comment}"'),
       ),

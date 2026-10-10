@@ -37,10 +37,11 @@ class QuestCard extends StatelessWidget {
                   avatar: const Icon(Icons.bolt, size: 18),
                   label: Text('Energy: ${energyLabels[quest.energy] ?? quest.energy}'),
                 ),
-                Chip(
-                  avatar: const Icon(Icons.place_outlined, size: 18),
-                  label: Text('≤ ${quest.distanceKm.toStringAsFixed(1)} km'),
-                ),
+                if (quest.distanceKm != null)
+                  Chip(
+                    avatar: const Icon(Icons.place_outlined, size: 18),
+                    label: Text('≤ ${quest.distanceKm!.toStringAsFixed(1)} km'),
+                  ),
               ],
             ),
             const SizedBox(height: 16),

@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../data/app_scope.dart';
+import '../widgets/sync_banner.dart';
+
 import 'account/account_screen.dart';
 import 'history/quest_history_screen.dart';
 import 'quest/quest_generator_screen.dart';
@@ -8,6 +11,9 @@ import 'quest/quest_generator_screen.dart';
 ///
 /// An [IndexedStack] keeps every tab alive, so each one keeps its scroll
 /// position and state when you switch away and back.
+///
+/// Coming back to the app (resume) triggers a sync, so changes made offline
+/// go out as soon as possible.
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key, this.initialTab = HomeTab.quest});
 
@@ -22,20 +28,49 @@ class HomeShell extends StatefulWidget {
 
 enum HomeTab { quest, history, account }
 
-class HomeShellState extends State<HomeShell> {
+class HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   late int _index = widget.initialTab.index;
 
   void selectTab(HomeTab tab) => setState(() => _index = tab.index);
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) AppScope.read(context).sync();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(
-        index: _index,
-        children: const [
-          QuestGeneratorScreen(),
-          QuestHistoryScreen(),
-          AccountScreen(),
+      body: Column(
+        children: [
+          const SyncBanner(),
+          Expanded(
+            // When the banner shows, it already sits under the status bar.
+            child: MediaQuery.removePadding(
+              context: context,
+              removeTop: SyncBanner.isVisible(AppScope.of(context)),
+              child: IndexedStack(
+                index: _index,
+                children: const [
+                  QuestGeneratorScreen(),
+                  QuestHistoryScreen(),
+                  AccountScreen(),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
       bottomNavigationBar: NavigationBar(

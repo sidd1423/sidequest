@@ -215,6 +215,31 @@ class QuestStatus(str, Enum):
     SKIPPED = "skipped"
 
 
+class QuestSettings(BaseModel):
+    """Per-quest choices the mobile app asks for right before each quest.
+
+    Any field left out falls back to the saved profile."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    duration_minutes: int | None = Field(None, ge=MIN_QUEST_MINUTES, le=MAX_QUEST_MINUTES)
+    difficulty: Difficulty | None = None
+    energy_level: int | None = Field(None, ge=1, le=5)
+    max_travel_km: float | None = Field(None, ge=0, le=MAX_TRAVEL_KM)
+
+    def apply(self, prefs: "PreferencesIn") -> "PreferencesIn":
+        data = prefs.model_dump()
+        if self.duration_minutes is not None:
+            data["availability"]["duration_minutes"] = self.duration_minutes
+        if self.difficulty is not None:
+            data["difficulty"] = self.difficulty
+        if self.energy_level is not None:
+            data["energy_level"] = self.energy_level
+        if self.max_travel_km is not None:
+            data["environment"]["max_travel_km"] = self.max_travel_km
+        return PreferencesIn.model_validate(data)
+
+
 class Quest(BaseModel):
     """A single sidequest, as produced by the LLM (validated)."""
 

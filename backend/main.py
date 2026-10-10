@@ -7,22 +7,24 @@ Docs at:   http://localhost:8000/docs
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Path, Query, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, status
+from fastapi.middleware.cors import CORSMiddleware
 
-from . import db, history, library, retrieval
+from . import auth, db, history, library, retrieval
 from .llm import GemmaClient, LLMClient, LLMError
 from .quest_generator import generate_quest
 from .schemas import (
-    USER_ID_PATTERN,
     FeedbackEntry,
     FeedbackIn,
     PreferencesIn,
     PreferencesOut,
     QuestExample,
     QuestRecord,
+    QuestSettings,
 )
 
 load_dotenv()
@@ -33,6 +35,7 @@ log = logging.getLogger("sidequest.api")
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     db.init_db()
+    auth.init_auth()
     try:
         library.init_library()  # create/migrate/seed data/quest_library.db
     except Exception as exc:  # the app still works without the library
@@ -44,15 +47,63 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="Sidequest API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Sidequest API", version="0.2.0", lifespan=lifespan)
 
-UserId = Path(..., pattern=USER_ID_PATTERN, description="3-64 chars: letters, digits, _ . @ -")
+# Flutter web runs on another origin (e.g. localhost:5xxxx). Native apps ignore CORS.
+_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origins,
+    allow_origin_regex=None if _origins else r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Every /users/{user_id}/... route: you must be logged in as that user
+# (or AUTH_REQUIRED=false for local dev without accounts).
+UserId = Depends(auth.authorized_user_id)
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
+
+# ---------------------------------------------------------------------------
+# Accounts
+# ---------------------------------------------------------------------------
+
+@app.post("/auth/signup", response_model=auth.SessionOut, status_code=status.HTTP_201_CREATED)
+def sign_up(data: auth.SignUpIn) -> auth.SessionOut:
+    return auth.create_session(auth.create_user(data))
+
+
+@app.post("/auth/login", response_model=auth.SessionOut)
+def log_in(data: auth.LogInIn) -> auth.SessionOut:
+    user = auth.authenticate(data.email, data.password)
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Wrong email or password")
+    return auth.create_session(user)
+
+
+@app.post("/auth/logout", status_code=status.HTTP_204_NO_CONTENT)
+def log_out(token: str = Depends(auth.current_token)) -> None:
+    auth.delete_session(token)
+
+
+@app.get("/auth/me", response_model=auth.UserOut)
+def me(user: auth.UserOut = Depends(auth.current_user)) -> auth.UserOut:
+    return user
+
+
+@app.patch("/auth/me", response_model=auth.UserOut)
+def update_me(changes: auth.AccountUpdate, user: auth.UserOut = Depends(auth.current_user)) -> auth.UserOut:
+    return auth.update_user(user.id, changes)
+
+
+# ---------------------------------------------------------------------------
+# Preferences
+# ---------------------------------------------------------------------------
 
 @app.get("/users/{user_id}/preferences", response_model=PreferencesOut)
 def read_preferences(user_id: str = UserId) -> PreferencesOut:
@@ -113,16 +164,22 @@ def find_examples(
 
 @app.post("/users/{user_id}/quests", response_model=QuestRecord, status_code=status.HTTP_201_CREATED)
 def create_quest(
+    settings: QuestSettings | None = Body(None),
     user_id: str = UserId,
     llm: LLMClient = Depends(get_llm),
     retriever: retrieval.Retriever | None = Depends(get_retriever),
 ) -> QuestRecord:
-    """Generate a new sidequest from the user's saved preferences and history."""
+    """Generate a new sidequest from the user's saved preferences and history.
+
+    Optional body: this quest's minutes / difficulty / energy / distance
+    (picked right before each quest in the app); missing ones come from the profile."""
     profile = db.get_preferences(user_id)
     if profile is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Save preferences before generating a quest")
 
     prefs = PreferencesIn.model_validate(profile.model_dump(exclude={"user_id", "created_at", "updated_at"}))
+    if settings is not None:
+        prefs = settings.apply(prefs)
     # Feedback is empty on a user's first run; examples come from the Tiger
     # library (so even new users get them) or, failing that, past liked quests.
     feedback = db.feedback_history(user_id) or None

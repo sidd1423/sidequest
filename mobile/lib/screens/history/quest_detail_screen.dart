@@ -1,61 +1,73 @@
 import 'package:flutter/material.dart';
 
-import '../../models/sample_quest.dart';
-import '../../widgets/coming_soon.dart';
+import '../../data/app_scope.dart';
+import '../../models/generated_quest.dart';
+import '../../models/quest_record.dart';
+import '../quest/quest_card.dart';
+import '../quest/quest_feedback_form.dart';
 import 'quest_history_screen.dart';
 
-export '../../models/sample_quest.dart' show SampleQuest;
-
-/// One past quest: details plus (later) feedback for quests you haven't rated.
+/// One past quest: the full quest card, how it went, and a rating form if
+/// you haven't rated it yet (works offline - syncs later).
 /// Pushed on the root navigator, so it has a back button instead of the bottom bar.
 class QuestDetailScreen extends StatelessWidget {
-  const QuestDetailScreen({super.key, required this.quest});
+  const QuestDetailScreen({super.key, required this.questId});
 
-  final SampleQuest quest;
+  final int questId;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final state = AppScope.of(context);
+    final matches = state.quests.where((q) => q.id == questId);
+    final record = matches.isEmpty ? null : matches.first;
     return Scaffold(
       appBar: AppBar(title: const Text('Quest')),
-      body: ListView(
-        key: const Key('quest_detail_screen'),
-        padding: const EdgeInsets.all(16),
-        children: [
-          Text(quest.title, style: theme.textTheme.headlineSmall),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            children: [
-              Chip(avatar: const Icon(Icons.timer_outlined, size: 18), label: Text('${quest.minutes} min')),
-              Chip(label: Text(statusLabel(quest.status))),
-              if (quest.rating != null) Chip(label: Text('★' * quest.rating!)),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Text(quest.summary, style: theme.textTheme.bodyLarge),
-          if (quest.steps.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            Text('Steps', style: theme.textTheme.titleMedium),
-            const SizedBox(height: 8),
-            for (var i = 0; i < quest.steps.length; i++)
-              ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                leading: CircleAvatar(radius: 14, child: Text('${i + 1}')),
-                title: Text(quest.steps[i]),
-              ),
-          ],
-          const SizedBox(height: 24),
-          if (quest.status == QuestStatus.suggested)
-            OutlinedButton.icon(
-              key: const Key('rate_quest_button'),
-              onPressed: () => showComingSoon(context, 'Rating quests'),
-              icon: const Icon(Icons.rate_review_outlined),
-              label: const Text('How did it go?'),
+      body: record == null
+          ? const Center(child: Text('This quest is no longer on this device.'))
+          : ListView(
+              key: const Key('quest_detail_screen'),
+              padding: const EdgeInsets.all(16),
+              children: [
+                QuestCard(quest: record.quest),
+                const SizedBox(height: 16),
+                if (record.feedback == null)
+                  QuestFeedbackForm(
+                    estimatedMinutes: record.quest.minutes,
+                    onSubmit: (QuestFeedback f) => state.sendFeedback(record.id, f),
+                  )
+                else
+                  _HowItWent(record: record),
+              ],
             ),
-        ],
+    );
+  }
+}
+
+class _HowItWent extends StatelessWidget {
+  const _HowItWent({required this.record});
+
+  final QuestRecord record;
+
+  @override
+  Widget build(BuildContext context) {
+    final f = record.feedback!;
+    final parts = <String>[statusLabel(record.status)];
+    if (f.rating != null) parts.add('★' * f.rating!);
+    if (f.timeLoggedMinutes > 0) parts.add('${f.timeLoggedMinutes} min');
+    return Card(
+      key: const Key('quest_detail_feedback'),
+      child: ListTile(
+        leading: Icon(record.feedbackPending ? Icons.cloud_upload_outlined : Icons.rate_review_outlined),
+        title: Text(parts.join(' · ')),
+        subtitle: Text([
+          if (f.comment.isNotEmpty) '"${f.comment}"',
+          if (record.feedbackPending) 'Waiting to sync',
+        ].join('\n').ifEmpty('No comment')),
       ),
     );
   }
+}
+
+extension on String {
+  String ifEmpty(String fallback) => isEmpty ? fallback : this;
 }

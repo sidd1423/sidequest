@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../../app_routes.dart';
+import '../../data/app_scope.dart';
 import '../../models/profile_preferences.dart';
 import '../../widgets/profile_preferences_form.dart';
 
 /// Second sign-up step: the preferences that stay the same between quests.
 /// (Difficulty, energy and distance are picked on the Quest page each time.)
-/// Still part of the auth flow, so no bottom bar.
+/// Still part of the auth flow, so no bottom bar. Also shown after logging in
+/// if the account has no preferences yet. Saving works offline (queued).
 class PreferencesSetupScreen extends StatefulWidget {
   const PreferencesSetupScreen({super.key});
 
@@ -16,9 +18,13 @@ class PreferencesSetupScreen extends StatefulWidget {
 
 class _PreferencesSetupScreenState extends State<PreferencesSetupScreen> {
   final _preferences = ProfilePreferences();
+  bool _saving = false;
 
-  void _finish() {
-    // TODO: save to the backend (PUT /users/{id}/preferences).
+  Future<void> _finish() async {
+    setState(() => _saving = true);
+    // Saved on the device right away; sent to the server now or once online.
+    await AppScope.read(context).saveProfile(_preferences);
+    if (!mounted) return;
     Navigator.of(context).pushNamedAndRemoveUntil(AppRoutes.home, (route) => false);
   }
 
@@ -49,7 +55,7 @@ class _PreferencesSetupScreenState extends State<PreferencesSetupScreen> {
                 const SizedBox(height: 32),
                 FilledButton(
                   key: const Key('finish_setup_button'),
-                  onPressed: _preferences.hasInterest ? _finish : null,
+                  onPressed: _preferences.hasInterest && !_saving ? _finish : null,
                   child: const Text('Start questing'),
                 ),
                 if (!_preferences.hasInterest)

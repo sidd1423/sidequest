@@ -1,3 +1,5 @@
+import 'data/app_state.dart';
+
 /// Named routes for the screens that sit on the root navigator.
 ///
 /// The three main tabs (Quest, History, Account) are not routes - they live
@@ -14,4 +16,8 @@ abstract final class AppRoutes {
   // Detail screens pushed from a tab
   static const questDetail = '/quest-detail';
   static const editAccount = '/account/edit';
+
+  /// After logging in (or opening the app logged in): set up preferences
+  /// first if this account has none yet, otherwise straight to Home.
+  static String afterLogin(AppState state) => state.profile == null ? preferencesSetup : home;
 }

@@ -1,0 +1,172 @@
+// An in-memory stand-in for the FastAPI backend, used through http's
+// MockClient so the widget tests exercise the real ApiClient + AppState.
+import 'dart:convert';
+
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+
+class FakeBackend {
+  /// false = every request fails like a dropped connection.
+  bool online = true;
+
+  final users = <String, Map<String, dynamic>>{}; // id -> {id, email, name, password}
+  final sessions = <String, String>{}; // token -> user id
+  final preferences = <String, Map<String, dynamic>>{}; // user id -> body
+  final quests = <String, List<Map<String, dynamic>>>{}; // user id -> records (newest first)
+  final requests = <String>[]; // "METHOD /path" log
+  Map<String, dynamic>? lastQuestSettings;
+  int _nextQuest = 1;
+  int _nextToken = 1;
+
+  late final http.Client client = MockClient(_handle);
+
+  /// Create an account directly (as if made earlier / on another device).
+  Map<String, dynamic> addUser({
+    String email = 'gowtham@example.com',
+    String password = 'correct horse',
+    String name = 'Gowtham',
+    Map<String, dynamic>? prefs,
+  }) {
+    final id = 'u_${users.length + 1}';
+    users[id] = {'id': id, 'email': email, 'name': name, 'password': password};
+    if (prefs != null) preferences[id] = prefs;
+    return users[id]!;
+  }
+
+  /// A session JSON like /auth/login returns (for pre-seeding the device).
+  Map<String, dynamic> sessionFor(String userId) {
+    final token = 'token_${_nextToken++}';
+    sessions[token] = userId;
+    return {'token': token, 'token_type': 'bearer', 'user': _public(users[userId]!)};
+  }
+
+  Map<String, dynamic> addQuest(String userId, {String title = 'Bench Bird Count', Map<String, dynamic>? feedback}) {
+    final record = {
+      'id': _nextQuest++,
+      'user_id': userId,
+      'status': feedback == null ? 'suggested' : (feedback['completed'] == true ? 'completed' : 'skipped'),
+      'quest': _quest(title, 10, 'easy', 2),
+      'feedback': feedback,
+      'created_at': DateTime.utc(2026, 10, 1).toIso8601String(),
+      'model': 'fake',
+    };
+    quests.putIfAbsent(userId, () => []).insert(0, record);
+    return record;
+  }
+
+  static Map<String, dynamic> _quest(String title, int minutes, String difficulty, int energy) => {
+        'title': title,
+        'summary': 'Sit outside and count every bird you see or hear.',
+        'steps': ['Step outside', 'Count for five minutes', 'Note your favourite'],
+        'estimated_minutes': minutes,
+        'difficulty': difficulty,
+        'energy_required': energy,
+        'setting': 'outdoor',
+        'tags': ['nature'],
+        'accessibility_notes': '',
+        'weather_backup': 'Find a covered bench.',
+        'why_it_fits': 'You like nature.',
+      };
+
+  Map<String, dynamic> _public(Map<String, dynamic> u) =>
+      {'id': u['id'], 'email': u['email'], 'name': u['name'], 'created_at': '2026-10-01T00:00:00Z'};
+
+  http.Response _json(Object? body, [int status = 200]) =>
+      http.Response(jsonEncode(body), status, headers: {'content-type': 'application/json'});
+
+  http.Response _error(int status, String detail) => _json({'detail': detail}, status);
+
+  Future<http.Response> _handle(http.Request request) async {
+    if (!online) throw http.ClientException('Connection refused', request.url);
+    final path = request.url.path;
+    requests.add('${request.method} $path');
+    final body = request.body.isEmpty ? null : jsonDecode(request.body);
+
+    // --- auth -------------------------------------------------------------
+    if (path == '/auth/signup' && request.method == 'POST') {
+      final b = body as Map<String, dynamic>;
+      final email = (b['email'] as String).trim().toLowerCase();
+      if (users.values.any((u) => u['email'] == email)) {
+        return _error(409, 'An account with this email already exists');
+      }
+      final u = addUser(email: email, password: b['password'] as String, name: (b['name'] as String?) ?? '');
+      return _json(sessionFor(u['id'] as String), 201);
+    }
+    if (path == '/auth/login' && request.method == 'POST') {
+      final b = body as Map<String, dynamic>;
+      final email = (b['email'] as String).trim().toLowerCase();
+      final matches = users.values.where((u) => u['email'] == email && u['password'] == b['password']);
+      if (matches.isEmpty) return _error(401, 'Wrong email or password');
+      return _json(sessionFor(matches.first['id'] as String));
+    }
+
+    final auth = request.headers['Authorization'] ?? '';
+    final userId = auth.startsWith('Bearer ') ? sessions[auth.substring(7)] : null;
+    if (userId == null) return _error(401, 'Log in again - your session is missing or has expired');
+
+    if (path == '/auth/logout') {
+      sessions.remove(auth.substring(7));
+      return http.Response('', 204);
+    }
+    if (path == '/auth/me' && request.method == 'PATCH') {
+      final u = users[userId]!;
+      final b = body as Map<String, dynamic>;
+      if (b['name'] != null) u['name'] = b['name'];
+      if (b['email'] != null) u['email'] = (b['email'] as String).toLowerCase();
+      return _json(_public(u));
+    }
+
+    // --- /users/{id}/... ----------------------------------------------------
+    final segments = request.url.pathSegments;
+    if (segments.length < 3 || segments[0] != 'users') return _error(404, 'Not found');
+    if (segments[1] != userId) return _error(403, 'You can only access your own data');
+
+    if (segments[2] == 'preferences') {
+      if (request.method == 'PUT') {
+        preferences[userId] = body as Map<String, dynamic>;
+        return _json({...preferences[userId]!, 'user_id': userId});
+      }
+      final p = preferences[userId];
+      return p == null ? _error(404, 'No preferences saved for this user') : _json({...p, 'user_id': userId});
+    }
+    if (segments[2] == 'quests' && segments.length == 3) {
+      if (request.method == 'GET') return _json(quests[userId] ?? []);
+      if (preferences[userId] == null) return _error(404, 'Save preferences before generating a quest');
+      final s = (body as Map<String, dynamic>?) ?? const {};
+      lastQuestSettings = s;
+      final n = _nextQuest;
+      final record = addQuest(userId, title: 'Quest #$n');
+      record['quest'] = _quest(
+        'Quest #$n',
+        (s['duration_minutes'] as int?) ?? 15,
+        (s['difficulty'] as String?) ?? 'moderate',
+        (s['energy_level'] as int?) ?? 3,
+      );
+      return _json(record, 201);
+    }
+    if (segments[2] == 'quests' && segments.length == 5 && segments[4] == 'feedback') {
+      final id = int.parse(segments[3]);
+      final list = quests[userId] ?? [];
+      final matches = list.where((q) => q['id'] == id);
+      if (matches.isEmpty) return _error(404, 'Quest not found');
+      final record = matches.first;
+      final fb = body as Map<String, dynamic>;
+      record['feedback'] = fb;
+      record['status'] = fb['completed'] == true ? 'completed' : 'skipped';
+      return _json(record);
+    }
+    return _error(404, 'Not found');
+  }
+}
+
+/// Preferences body a returning user already has on the server.
+const savedPrefs = <String, dynamic>{
+  'interests': ['nature'],
+  'custom_interests': <String>[],
+  'difficulty': 'easy',
+  'energy_level': 2,
+  'availability': {'duration_minutes': 15},
+  'accessibility': {'needs': <String>[], 'notes': ''},
+  'environment': {'surroundings': <String>[], 'crowd_tolerance': 'quiet', 'group_size': 'solo', 'max_travel_km': 1.0},
+  'weather': {'avoid': <String>[], 'min_temp_c': 5, 'max_temp_c': 30},
+};

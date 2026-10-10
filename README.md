@@ -21,6 +21,11 @@ Streamlit UI (app.py)  ──HTTP/JSON──▶  FastAPI backend (backend/)  ─
   crowds, group, weather). Validates input with the
   shared schema, then sends it to the backend via `frontend/api_client.py`.
 - **Backend** `backend/main.py`: REST API that validates and stores preferences.
+- **Accounts** `backend/auth.py`: email + password sign-up/log-in. Passwords are
+  hashed with salted PBKDF2-SHA256; log-in returns a random bearer token (only
+  its SHA-256 is stored) valid for `SESSION_DAYS` (default 90, so the
+  offline-first mobile app stays logged in). Every `/users/{user_id}/...` route
+  only accepts the token of that user (401 without one, 403 for someone else's).
 - **Storage** `backend/db.py`: preferences, quests and feedback in SQLite. Swap
   this module for Postgres later without touching the API or UI.
 - **Quest generation** `backend/quest_generator.py`:
@@ -45,14 +50,22 @@ Streamlit UI (app.py)  ──HTTP/JSON──▶  FastAPI backend (backend/)  ─
 | Method | Path | Description |
 |--------|------|-------------|
 | GET    | `/health` | Health check |
+| POST   | `/auth/signup` | Create an account `{name, email, password}` -> `{token, user}` |
+| POST   | `/auth/login` | `{email, password}` -> `{token, user}` (a new session per device) |
+| POST   | `/auth/logout` | Revoke the current token |
+| GET / PATCH | `/auth/me` | The logged-in user / change name or email |
 | GET    | `/users/{user_id}/preferences` | Fetch saved preferences (404 if none) |
 | PUT    | `/users/{user_id}/preferences` | Create or update preferences |
 | DELETE | `/users/{user_id}/preferences` | Delete preferences |
-| POST   | `/users/{user_id}/quests` | Generate a new sidequest with Gemma |
+| POST   | `/users/{user_id}/quests` | Generate a new sidequest with Gemma. Optional body `{duration_minutes, difficulty, energy_level, max_travel_km}` overrides the profile for this quest |
 | GET    | `/users/{user_id}/quests` | List the user's quests, newest first |
 | POST   | `/users/{user_id}/quests/{quest_id}/feedback` | Mark completed/skipped, rate 1-5, comment |
 
-Interactive docs: http://localhost:8000/docs
+`/users/...` routes need `Authorization: Bearer <token>` (user ids look like
+`u_3f2a...`). Set `AUTH_REQUIRED=false` in `.env` to allow token-less requests
+for local experiments (a token for another user is still rejected).
+
+Interactive docs: http://localhost:8000/docs (click **Authorize** and paste a token)
 
 ## Setup (Windows PowerShell)
 
@@ -157,6 +170,8 @@ pgvector tests are skipped unless `TEST_PG_URL` points at a Postgres with the
 
 ## Mobile app (Flutter)
 
-`mobile/` contains the Flutter app outline: Log in, Sign up, and a bottom bar
-with Quest generator, History (+ quest detail) and Account (+ edit account).
-Screens and navigation only - no functionality yet. See `mobile/README.md`.
+`mobile/` is the Flutter app: sign up / log in against the backend, then a
+bottom bar with Quest generator, History (+ quest detail) and Account (+ edit
+account). It's offline-first - the session, profile and quest history are
+stored on the device and ratings/preference edits made offline sync later.
+See `mobile/README.md`.

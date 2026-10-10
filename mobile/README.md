@@ -1,9 +1,23 @@
 # Sidequest mobile app (Flutter)
 
-App outline: all screens and navigation, **no backend calls yet**. Forms work
-locally (selections, validation, the quest card and rating form), quests are
-placeholders, buttons that would hit the server show "coming soon", and the
-History tab shows sample quests.
+Sign up / log in against the FastAPI backend, set your preferences, generate
+quests with Gemma, rate them and browse your history - **offline-first**.
+
+**Accounts & offline storage**
+
+| What | Stored on the device in | Works offline? |
+|---|---|---|
+| Login session (token + name/email) | `flutter_secure_storage` (Keychain / Android Keystore / Windows DPAPI) | Yes - the app opens straight into your account |
+| Preferences, quest history | `shared_preferences` cache, per account | Yes - shown from the cache, refreshed when online |
+| Ratings & preference edits made offline | an *outbox* in the same cache | Yes - saved instantly, sent when back online |
+| Signing up, logging in, changing name/email, **generating a quest** | - | No - these need the server (Gemma runs there) |
+
+Sync runs on app start, when the app returns to the foreground, on
+pull-to-refresh in History, from **Account > Sync**, and after anything that
+reaches the server. A banner shows when you're offline (with the number of
+unsynced changes) or when the session expired (log in again - nothing queued
+is lost). Logging out removes that account's data from the device (and warns
+first if changes haven't synced). Logic: `lib/data/app_state.dart`.
 
 **Which preferences live where**
 
@@ -19,7 +33,7 @@ History tab shows sample quests.
 
 ```
 Log in  <──>  Sign up ──▶ Set up your quests   auth screens - no bottom bar
-   │                          │
+   │     (no preferences yet?) ──▶ │
    └──── Log in ──────── Start questing ─┐    (back stack cleared)
                                      ▼
             ┌──────────── bottom bar ────────────┐
@@ -43,7 +57,9 @@ Log in  <──>  Sign up ──▶ Set up your quests   auth screens - no botto
 - The bottom bar lives in `lib/screens/home_shell.dart` (Material 3
   `NavigationBar` + `IndexedStack`, so each tab keeps its state).
 - Route names are in `lib/app_routes.dart`; routes are registered in `lib/main.dart`.
-- No third-party packages - just Flutter's built-in `Navigator`.
+- The app opens on Home when a session is saved on the device, otherwise on Log in.
+- Packages: `http`, `shared_preferences`, `flutter_secure_storage`. State is a
+  plain `ChangeNotifier` (`lib/data/app_state.dart`) shared via `AppScope`.
 
 ## Run it (Windows)
 
@@ -57,10 +73,19 @@ Log in  <──>  Sign up ──▶ Set up your quests   auth screens - no botto
    flutter create --project-name sidequest --platforms=android,ios,web,windows .
    ```
 
-3. Run and test:
+3. Start the backend (repo root, venv): `uvicorn backend.main:app --reload --host 0.0.0.0`
+   (`--host 0.0.0.0` lets an emulator or phone reach it).
+4. Run and test:
 
    ```powershell
    flutter pub get
    flutter run          # pick Chrome, Windows or an emulator
-   flutter test         # navigation tests in test/widget_test.dart
+   flutter test         # widget tests against a fake backend (test/fake_backend.dart)
    ```
+
+   The app calls `http://localhost:8000` (Android emulator: `http://10.0.2.2:8000`).
+   On a real phone, use your computer's LAN address:
+   `flutter run --dart-define=API_BASE_URL=http://192.168.1.20:8000`.
+   Windows desktop builds need Visual Studio's *C++ ATL* component (used by
+   `flutter_secure_storage`). Debug Android builds allow plain `http://` (see
+   `android/app/src/debug/AndroidManifest.xml`); use HTTPS for release.

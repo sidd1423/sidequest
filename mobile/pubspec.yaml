@@ -6,10 +6,14 @@ version: 0.1.0+1
 environment:
   sdk: ">=3.4.0 <4.0.0"
 
-# No third-party packages yet - navigation uses Flutter's built-in Navigator.
+# Navigation uses Flutter's built-in Navigator; state uses a ChangeNotifier
+# (lib/data/app_state.dart) - no state-management package needed.
 dependencies:
   flutter:
     sdk: flutter
+  http: ^1.2.2                     # talks to the FastAPI backend
+  shared_preferences: ^2.3.2       # offline cache: profile, quest history, unsynced changes
+  flutter_secure_storage: ^9.2.2   # the login token (Keychain / Keystore / DPAPI)
 
 dev_dependencies:
   flutter_test:

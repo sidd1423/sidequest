@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import '../models/account.dart';
+import '../models/friends.dart';
 import '../models/generated_quest.dart';
 import '../models/journal_entry.dart';
 import '../models/profile_preferences.dart';
@@ -42,7 +43,7 @@ class AppState extends ChangeNotifier {
   final KeyValueStore _secure;
 
   static const _sessionKey = 'session';
-  static const _cacheNames = ['profile', 'quests', 'outbox', 'meta', 'journal', 'rewards', 'streak'];
+  static const _cacheNames = ['profile', 'quests', 'outbox', 'meta', 'journal', 'rewards', 'streak', 'friends'];
 
   Session? _session;
   ProfilePreferences? _profile;
@@ -55,6 +56,7 @@ class AppState extends ChangeNotifier {
   int _completedCount = 0;
   Rewards? _rewards;
   StreakInfo? _streak;
+  FriendsData _friends = const FriendsData();
   int? _activeQuestId;
   Map<int, List<JournalEntry>> _journals = {};
   final Map<String, Uint8List> _photoCache = {}; // downloaded photos, by client id (memory only)
@@ -75,6 +77,12 @@ class AppState extends ChangeNotifier {
   /// The daily streak, rolled forward to right now (a new day can put it at
   /// risk or use a freeze even before the server is asked). Never null.
   StreakInfo get streak => (_streak ?? StreakInfo.empty(clock())).asOf(clock());
+
+  /// Friends and friend requests (last copy from the server).
+  FriendsData get friends => _friends;
+
+  /// Friend requests waiting for you (the badge on the Friends tab).
+  int get incomingFriendRequests => _friends.incoming.length;
 
   /// "Now" - swappable in tests.
   DateTime Function() clock = DateTime.now;
@@ -147,6 +155,7 @@ class AppState extends ChangeNotifier {
       _journals = {};
       _rewards = null;
       _streak = null;
+      _friends = const FriendsData();
     }
   }
 
@@ -169,6 +178,8 @@ class AppState extends ChangeNotifier {
     _rewards = rewards == null ? null : Rewards.fromJson(jsonDecode(rewards) as Map<String, dynamic>);
     final streak = await _cache.read(_key('streak'));
     _streak = streak == null ? null : StreakInfo.fromJson(jsonDecode(streak) as Map<String, dynamic>);
+    final friends = await _cache.read(_key('friends'));
+    _friends = friends == null ? const FriendsData() : FriendsData.fromJson(jsonDecode(friends) as Map<String, dynamic>);
     final journal = await _cache.read(_key('journal'));
     _journals = {};
     if (journal != null) {
@@ -192,6 +203,7 @@ class AppState extends ChangeNotifier {
       'journal:$id': jsonEncode([for (final list in _journals.values) for (final e in list) e.toJson()]),
       if (_rewards != null) 'rewards:$id': jsonEncode(_rewards!.toJson()),
       if (_streak != null) 'streak:$id': jsonEncode(_streak!.toJson()),
+      'friends:$id': jsonEncode(_friends.toJson()),
     };
     for (final entry in values.entries) {
       if (_session?.token != session.token) return; // logged out meanwhile - don't write it back
@@ -263,6 +275,7 @@ class AppState extends ChangeNotifier {
     _journals = {};
     _rewards = null;
     _streak = null;
+    _friends = const FriendsData();
     _photoCache.clear();
     _sessionExpired = false;
     _lastSyncError = null;
@@ -464,6 +477,63 @@ class AppState extends ChangeNotifier {
     unawaited(loadRewards()); // spendable points changed
   }
 
+  // ---------------------------------------------------------------------------
+  // Friends (changes need a connection; the list is cached for offline)
+  // ---------------------------------------------------------------------------
+
+  /// Refresh friends + requests. Offline / old server: keeps the cached copy.
+  Future<void> loadFriends() async {
+    final session = _session;
+    if (session == null) return;
+    try {
+      final json = await _call(() => api.get('/users/${session.account.id}/friends'));
+      if (_session?.token != session.token) return;
+      _friends = FriendsData.fromJson(json as Map<String, dynamic>);
+      await _saveCache();
+      notifyListeners();
+    } on OfflineException {
+      // keep the cached copy
+    } on ApiException {
+      // keep the cached copy
+    }
+  }
+
+  /// Ask someone to be friends by their account email. Returns who it went
+  /// to and whether you're friends already (they had asked you first).
+  /// Throws [ApiException] (404 no account with that email, 409 already
+  /// friends / already asked, 422 your own email) or [OfflineException].
+  Future<({Person person, bool nowFriends})> sendFriendRequest(String email) async {
+    final userId = _session!.account.id;
+    final json = await _call(
+      () => api.post('/users/$userId/friends/requests', {'email': email.trim()}),
+    ) as Map<String, dynamic>;
+    await loadFriends();
+    return (
+      person: Person.fromJson(json['person'] as Map<String, dynamic>),
+      nowFriends: json['status'] == 'accepted',
+    );
+  }
+
+  /// Accept or decline a request someone sent you.
+  Future<void> respondToFriendRequest(int requestId, {required bool accept}) async {
+    final userId = _session!.account.id;
+    await _call(() => api.post('/users/$userId/friends/requests/$requestId/${accept ? 'accept' : 'decline'}'));
+    await loadFriends();
+  }
+
+  /// Take back a request you sent.
+  Future<void> cancelFriendRequest(int requestId) async {
+    final userId = _session!.account.id;
+    await _call(() => api.delete('/users/$userId/friends/requests/$requestId'));
+    await loadFriends();
+  }
+
+  Future<void> removeFriend(String friendId) async {
+    final userId = _session!.account.id;
+    await _call(() => api.delete('/users/$userId/friends/$friendId'));
+    await loadFriends();
+  }
+
   /// A photo's bytes: from the device if we have them, else downloaded once.
   Future<Uint8List?> photoBytes(JournalEntry entry) async {
     final local = entry.localImage;
@@ -551,6 +621,7 @@ class AppState extends ChangeNotifier {
       if (refresh && stillCurrent()) {
         await _refresh(session);
         if (stillCurrent()) await loadStreak();
+        if (stillCurrent()) await loadFriends();
       }
       if (stillCurrent()) _lastSyncError = dropped;
     } on OfflineException {

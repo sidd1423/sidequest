@@ -22,6 +22,17 @@ class FakeBackend {
   /// Completing a quest bumps it like the real server would.
   final streakOverride = <String, Map<String, dynamic>>{};
   final streakFreezes = <String, int>{}; // bought, per user
+
+  /// {id, from, to, status: pending|accepted} - like backend/friends.py.
+  final friendships = <Map<String, dynamic>>[];
+  int _nextFriendship = 1;
+
+  /// A friend request from [from] to [to] (as if sent from another device).
+  Map<String, dynamic> addFriendship(String from, String to, {bool accepted = false}) {
+    final f = {'id': _nextFriendship++, 'from': from, 'to': to, 'status': accepted ? 'accepted' : 'pending'};
+    friendships.add(f);
+    return f;
+  }
   int _nextQuest = 1;
   int _nextToken = 1;
 
@@ -184,6 +195,7 @@ class FakeBackend {
       }
       return _json(_streak(userId));
     }
+    if (segments[2] == 'friends') return _friendsRoute(request, segments, userId, body);
     if (segments[2] == 'stats') {
       final list = quests[userId] ?? [];
       return _json({
@@ -277,6 +289,85 @@ class FakeBackend {
 }
 
 extension on FakeBackend {
+  Map<String, dynamic> _person(String id) =>
+      {'user_id': id, 'name': users[id]!['name'], 'email': users[id]!['email']};
+
+  http.Response _friendsRoute(http.Request request, List<String> segments, String userId, dynamic body) {
+    Map<String, dynamic>? pair(String a, String b) {
+      final m = friendships.where((f) => (f['from'] == a && f['to'] == b) || (f['from'] == b && f['to'] == a));
+      return m.isEmpty ? null : m.first;
+    }
+
+    String other(Map<String, dynamic> f) => (f['from'] == userId ? f['to'] : f['from']) as String;
+    final created = DateTime.utc(2026, 10, 1).toIso8601String();
+
+    // GET /users/{id}/friends
+    if (segments.length == 3 && request.method == 'GET') {
+      final mine = friendships.where((f) => (f['from'] == userId || f['to'] == userId) && users.containsKey(other(f)));
+      return _json({
+        'friends': [
+          for (final f in mine.where((f) => f['status'] == 'accepted'))
+            {
+              ..._person(other(f)),
+              'since': created,
+              'completed': (quests[other(f)] ?? []).where((q) => q['status'] == 'completed').length,
+              'points': 0,
+              'level_name': 'Homebody',
+              'current_streak': 0,
+            },
+        ],
+        'incoming': [
+          for (final f in mine.where((f) => f['status'] == 'pending' && f['to'] == userId))
+            {'request_id': f['id'], 'person': _person(f['from'] as String), 'created_at': created},
+        ],
+        'outgoing': [
+          for (final f in mine.where((f) => f['status'] == 'pending' && f['from'] == userId))
+            {'request_id': f['id'], 'person': _person(f['to'] as String), 'created_at': created},
+        ],
+      });
+    }
+    // POST /users/{id}/friends/requests {email}
+    if (segments.length == 4 && segments[3] == 'requests' && request.method == 'POST') {
+      final email = ((body as Map<String, dynamic>)['email'] as String).trim().toLowerCase();
+      final matches = users.values.where((u) => u['email'] == email);
+      if (matches.isEmpty) return _error(404, "There's no Sidequest account with that email");
+      final to = matches.first['id'] as String;
+      if (to == userId) return _error(422, "That's your own email");
+      final existing = pair(userId, to);
+      if (existing != null) {
+        if (existing['status'] == 'accepted') return _error(409, "You're already friends");
+        if (existing['from'] == userId) return _error(409, 'You already sent them a friend request');
+        existing['status'] = 'accepted';
+        return _json({'status': 'accepted', 'request_id': existing['id'], 'person': _person(to)}, 201);
+      }
+      final f = addFriendship(userId, to);
+      return _json({'status': 'pending', 'request_id': f['id'], 'person': _person(to)}, 201);
+    }
+    // POST .../requests/{rid}/accept|decline, DELETE .../requests/{rid}
+    if (segments.length >= 5 && segments[3] == 'requests') {
+      final rid = int.parse(segments[4]);
+      final mineToAnswer = segments.length == 6;
+      final matches = friendships.where((f) =>
+          f['id'] == rid && f['status'] == 'pending' && f[mineToAnswer ? 'to' : 'from'] == userId);
+      if (matches.isEmpty) return _error(404, 'Friend request not found');
+      final f = matches.first;
+      if (mineToAnswer && segments[5] == 'accept') {
+        f['status'] = 'accepted';
+      } else {
+        friendships.remove(f);
+      }
+      return http.Response('', 204);
+    }
+    // DELETE /users/{id}/friends/{friend_id}
+    if (segments.length == 4 && request.method == 'DELETE') {
+      final f = pair(userId, segments[3]);
+      if (f == null || f['status'] != 'accepted') return _error(404, "You're not friends with this person");
+      friendships.remove(f);
+      return http.Response('', 204);
+    }
+    return _error(404, 'Not found');
+  }
+
   /// Simplified backend/streak.py: 1-day streak once anything is completed;
   /// 10 points per completed quest, 100 per freeze bought.
   Map<String, dynamic> _streak(String userId) {

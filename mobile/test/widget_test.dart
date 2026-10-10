@@ -319,7 +319,7 @@ void main() {
   });
 
   group('Bottom bar (signed in)', () {
-    testWidgets('switches between Quest, History, Rewards and Account', (tester) async {
+    testWidgets('switches between Quest, History, Rewards, Friends and Account', (tester) async {
       await startLoggedIn(tester, quests: 1);
       expect(selectedTab(tester), 0);
 
@@ -331,8 +331,12 @@ void main() {
       expect(selectedTab(tester), 2);
       expect(find.byKey(const Key('rewards_screen')), findsOneWidget);
 
-      await tapAndSettle(tester, navItem('Account'));
+      await tapAndSettle(tester, navItem('Friends'));
       expect(selectedTab(tester), 3);
+      expect(find.byKey(const Key('friends_screen')), findsOneWidget);
+
+      await tapAndSettle(tester, navItem('Account'));
+      expect(selectedTab(tester), 4);
       expect(find.byKey(const Key('account_screen')), findsOneWidget);
 
       await tapAndSettle(tester, navItem('Quest'));
@@ -344,7 +348,7 @@ void main() {
       await startLoggedIn(tester);
       tester.state<HomeShellState>(find.byType(HomeShell)).selectTab(HomeTab.account);
       await tester.pumpAndSettle();
-      expect(selectedTab(tester), 3);
+      expect(selectedTab(tester), 4);
     });
 
     testWidgets('empty history links to the Quest tab', (tester) async {
@@ -479,7 +483,7 @@ void main() {
       await tapAndSettle(tester, find.byKey(const Key('save_account_button')));
 
       expect(find.byKey(const Key('account_screen')), findsOneWidget);
-      expect(selectedTab(tester), 3);
+      expect(selectedTab(tester), 4);
       expect(find.text('G'), findsOneWidget);
       expect(backend.users[state.account!.id]!['name'], 'G');
     });
@@ -886,6 +890,157 @@ void main() {
       final back = StreakInfo.fromJson(jsonDecode(jsonEncode(s.toJson())) as Map<String, dynamic>);
       expect((back.current, back.freezes, back.today), (2, 1, today));
       expect(back.completedDays, s.completedDays);
+    });
+  });
+  group('Friends', () {
+    /// [userId] logged in on this device, synced, app showing.
+    Future<AppState> startAs(WidgetTester tester, String userId) async {
+      useTallScreen(tester);
+      await secure.write('session', jsonEncode(backend.sessionFor(userId)));
+      final state = newState();
+      await state.restore();
+      await state.sync();
+      await tester.pumpWidget(SidequestApp(state: state));
+      await tester.pumpAndSettle();
+      return state;
+    }
+
+    String addPerson(String email, String name) =>
+        backend.addUser(email: email, name: name, prefs: Map.of(savedPrefs))['id'] as String;
+
+    Future<void> sendRequest(WidgetTester tester, String email) async {
+      await tapAndSettle(tester, find.byKey(const Key('add_friend_button')));
+      expect(find.byKey(const Key('add_friend_dialog')), findsOneWidget);
+      await tester.enterText(find.byKey(const Key('friend_email_field')), email);
+      await tapAndSettle(tester, find.byKey(const Key('send_friend_request')));
+    }
+
+    testWidgets('empty Friends page has an Add new friend button', (tester) async {
+      await startAs(tester, addPerson('me@example.com', 'Me'));
+      await tapAndSettle(tester, navItem('Friends'));
+      expect(find.byKey(const Key('add_friend_button')), findsOneWidget);
+      expect(find.text('Add new friend'), findsOneWidget);
+      expect(find.byKey(const Key('no_friends')), findsOneWidget);
+    });
+
+    testWidgets('send a request by email; it waits for them to accept', (tester) async {
+      final me = addPerson('me@example.com', 'Me');
+      final sam = addPerson('sam@example.com', 'Sam');
+      await startAs(tester, me);
+      await tapAndSettle(tester, navItem('Friends'));
+
+      await sendRequest(tester, '  Sam@Example.com ');
+      expect(find.byKey(const Key('add_friend_dialog')), findsNothing);
+      expect(find.text('Friend request sent to Sam.'), findsOneWidget);
+      expect(backend.friendships.single, containsPair('to', sam));
+      expect(find.byKey(const Key('outgoing_heading')), findsOneWidget);
+      expect(find.text('Request sent'), findsOneWidget);
+      expect(find.byKey(const Key('no_friends')), findsOneWidget); // not friends until they accept
+    });
+
+    testWidgets('unknown email, own email and bad input show an error in the dialog', (tester) async {
+      await startAs(tester, addPerson('me@example.com', 'Me'));
+      await tapAndSettle(tester, navItem('Friends'));
+
+      await sendRequest(tester, 'nobody@example.com');
+      expect(find.text("There's no Sidequest account with that email"), findsOneWidget);
+      expect(find.byKey(const Key('add_friend_dialog')), findsOneWidget); // stays open to fix it
+
+      await tester.enterText(find.byKey(const Key('friend_email_field')), 'me@example.com');
+      await tapAndSettle(tester, find.byKey(const Key('send_friend_request')));
+      expect(find.text("That's your own email"), findsOneWidget);
+
+      await tester.enterText(find.byKey(const Key('friend_email_field')), 'not an email');
+      await tapAndSettle(tester, find.byKey(const Key('send_friend_request')));
+      expect(find.text('Enter the email they use for Sidequest.'), findsOneWidget);
+      expect(backend.friendships, isEmpty);
+    });
+
+    testWidgets('incoming request shows a badge and can be accepted', (tester) async {
+      final me = addPerson('me@example.com', 'Me');
+      final sam = addPerson('sam@example.com', 'Sam');
+      final f = backend.addFriendship(sam, me);
+      await startAs(tester, me);
+
+      // Badge on the tab (visible while another tab is selected).
+      final badge = tester.widget<Badge>(find.byKey(const Key('friends_badge')));
+      expect(badge.isLabelVisible, isTrue);
+      expect(find.descendant(of: find.byKey(const Key('friends_badge')), matching: find.text('1')), findsOneWidget);
+
+      await tapAndSettle(tester, navItem('Friends'));
+      expect(find.byKey(Key('incoming_${f['id']}')), findsOneWidget);
+      await tapAndSettle(tester, find.byKey(Key('accept_${f['id']}')));
+
+      expect(find.text('You and Sam are now friends!'), findsOneWidget);
+      expect(find.byKey(Key('friend_$sam')), findsOneWidget);
+      expect(find.byKey(Key('incoming_${f['id']}')), findsNothing);
+      expect(backend.friendships.single['status'], 'accepted');
+
+      await tapAndSettle(tester, navItem('Quest'));
+      expect(tester.widget<Badge>(find.byKey(const Key('friends_badge'))).isLabelVisible, isFalse);
+    });
+
+    testWidgets('declining a request removes it', (tester) async {
+      final me = addPerson('me@example.com', 'Me');
+      final f = backend.addFriendship(addPerson('sam@example.com', 'Sam'), me);
+      await startAs(tester, me);
+      await tapAndSettle(tester, navItem('Friends'));
+      await tapAndSettle(tester, find.byKey(Key('decline_${f['id']}')));
+      expect(find.byKey(Key('incoming_${f['id']}')), findsNothing);
+      expect(backend.friendships, isEmpty);
+      expect(find.byKey(const Key('no_friends')), findsOneWidget);
+    });
+
+    testWidgets('asking someone who already asked you makes you friends', (tester) async {
+      final me = addPerson('me@example.com', 'Me');
+      final sam = addPerson('sam@example.com', 'Sam');
+      backend.addFriendship(sam, me);
+      await startAs(tester, me);
+      await tapAndSettle(tester, navItem('Friends'));
+      await sendRequest(tester, 'sam@example.com');
+      expect(find.text('You and Sam are now friends!'), findsOneWidget);
+      expect(find.byKey(Key('friend_$sam')), findsOneWidget);
+    });
+
+    testWidgets('friends list shows friends; cancel a sent request; remove a friend', (tester) async {
+      final me = addPerson('me@example.com', 'Me');
+      final sam = addPerson('sam@example.com', 'Sam');
+      final ria = addPerson('ria@example.com', '');
+      backend.addFriendship(me, sam, accepted: true);
+      final sent = backend.addFriendship(me, ria);
+      await startAs(tester, me);
+      await tapAndSettle(tester, navItem('Friends'));
+
+      expect(find.text('Your friends (1)'), findsOneWidget);
+      expect(find.text('Sam'), findsOneWidget);
+      expect(find.text('ria@example.com'), findsOneWidget); // no name: shows the email
+
+      await tapAndSettle(tester, find.byKey(Key('cancel_request_${sent['id']}')));
+      expect(find.byKey(Key('outgoing_${sent['id']}')), findsNothing);
+
+      await tapAndSettle(tester, find.byKey(Key('friend_menu_$sam')));
+      await tapAndSettle(tester, find.byKey(const Key('remove_friend')));
+      await tapAndSettle(tester, find.byKey(const Key('confirm_remove_friend')));
+      expect(find.byKey(Key('friend_$sam')), findsNothing);
+      expect(backend.friendships, isEmpty);
+    });
+
+    testWidgets('the list is kept for offline; changes explain they need a connection', (tester) async {
+      final me = addPerson('me@example.com', 'Me');
+      final sam = addPerson('sam@example.com', 'Sam');
+      backend.addFriendship(me, sam, accepted: true);
+      final first = newState();
+      await secure.write('session', jsonEncode(backend.sessionFor(me)));
+      await first.restore();
+      await first.sync();
+
+      backend.online = false;
+      await startApp(tester);
+      await tapAndSettle(tester, navItem('Friends'));
+      expect(find.byKey(Key('friend_$sam')), findsOneWidget);
+
+      await sendRequest(tester, 'someone@example.com');
+      expect(find.text('Sending a friend request needs a connection.'), findsOneWidget);
     });
   });
 }

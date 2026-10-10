@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import auth, db, history, journal, library, retrieval, rewards, streak, taste as taste_mod
+from . import auth, db, friends, history, journal, library, retrieval, rewards, streak, taste as taste_mod
 from .llm import GemmaClient, LLMClient, LLMError
 from .quest_generator import generate_quest
 from .schemas import (
@@ -38,6 +38,7 @@ async def lifespan(_: FastAPI):
     auth.init_auth()
     journal.init_journal()
     streak.init_streaks()
+    friends.init_friends()
     if not os.getenv("GEMMA_API_KEY") and "googleapis" in os.getenv(
         "GEMMA_BASE_URL", "https://generativelanguage.googleapis.com"
     ):
@@ -114,7 +115,7 @@ def delete_me(confirm: auth.DeleteAccountIn, user: auth.UserOut = Depends(auth.c
     if not auth.password_matches(user.id, confirm.password):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Wrong password")
     db.delete_user_data(user.id)
-    for cleanup in (library.delete_user, history.delete_user):
+    for cleanup in (library.delete_user, history.delete_user, friends.delete_user):
         try:
             cleanup(user.id)
         except Exception as exc:
@@ -325,3 +326,41 @@ def buy_streak_freeze(user_id: str = UserId, tz_offset_minutes: int = TzOffset) 
     except streak.FreezeError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return streak.compute(user_id, points, tz_offset_minutes)
+
+
+# ---------------------------------------------------------------------------
+# Friends (see backend/friends.py)
+# ---------------------------------------------------------------------------
+
+@app.get("/users/{user_id}/friends", response_model=friends.FriendsOut)
+def read_friends(user_id: str = UserId) -> friends.FriendsOut:
+    """Your friends (with a few stats), requests waiting for you, and requests you sent."""
+    return friends.list_for(user_id)
+
+
+@app.post("/users/{user_id}/friends/requests", response_model=friends.RequestResult,
+          status_code=status.HTTP_201_CREATED)
+def send_friend_request(body: friends.FriendRequestIn, user_id: str = UserId) -> friends.RequestResult:
+    """Ask someone to be friends by the email on their account. 404 no such account,
+    409 already friends / already asked. If they already asked you, you're friends now."""
+    return friends.send_request(user_id, body.email)
+
+
+@app.post("/users/{user_id}/friends/requests/{request_id}/accept", status_code=status.HTTP_204_NO_CONTENT)
+def accept_friend_request(request_id: int, user_id: str = UserId) -> None:
+    friends.respond(user_id, request_id, accept=True)
+
+
+@app.post("/users/{user_id}/friends/requests/{request_id}/decline", status_code=status.HTTP_204_NO_CONTENT)
+def decline_friend_request(request_id: int, user_id: str = UserId) -> None:
+    friends.respond(user_id, request_id, accept=False)
+
+
+@app.delete("/users/{user_id}/friends/requests/{request_id}", status_code=status.HTTP_204_NO_CONTENT)
+def cancel_friend_request(request_id: int, user_id: str = UserId) -> None:
+    friends.cancel(user_id, request_id)
+
+
+@app.delete("/users/{user_id}/friends/{friend_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_friend(friend_id: str, user_id: str = UserId) -> None:
+    friends.remove(user_id, friend_id)

@@ -4,11 +4,12 @@ import '../data/app_scope.dart';
 import '../widgets/sync_banner.dart';
 
 import 'account/account_screen.dart';
+import 'friends/friends_screen.dart';
 import 'history/quest_history_screen.dart';
 import 'quest/quest_generator_screen.dart';
 import 'rewards/rewards_screen.dart';
 
-/// The signed-in area: four tabs switched with the bottom navigation bar.
+/// The signed-in area: five tabs switched with the bottom navigation bar.
 ///
 /// An [IndexedStack] keeps every tab alive, so each one keeps its scroll
 /// position and state when you switch away and back.
@@ -27,7 +28,7 @@ class HomeShell extends StatefulWidget {
   State<HomeShell> createState() => HomeShellState();
 }
 
-enum HomeTab { quest, history, rewards, account }
+enum HomeTab { quest, history, rewards, friends, account }
 
 class HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   late int _index = widget.initialTab.index;
@@ -38,6 +39,7 @@ class HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     setState(() => _index = index);
     // Fresh points every time the Rewards tab opens.
     if (index == HomeTab.rewards.index) AppScope.read(context).loadRewards();
+    if (index == HomeTab.friends.index) AppScope.read(context).loadFriends();
   }
 
   @override
@@ -59,6 +61,7 @@ class HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    final requests = AppScope.of(context).incomingFriendRequests;
     return Scaffold(
       body: Column(
         children: [
@@ -74,6 +77,7 @@ class HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
                   QuestGeneratorScreen(),
                   QuestHistoryScreen(),
                   RewardsScreen(),
+                  FriendsScreen(),
                   AccountScreen(),
                 ],
               ),
@@ -85,23 +89,34 @@ class HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         key: const Key('bottom_nav'),
         selectedIndex: _index,
         onDestinationSelected: _select,
-        destinations: const [
-          NavigationDestination(
+        destinations: [
+          const NavigationDestination(
             icon: Icon(Icons.explore_outlined),
             selectedIcon: Icon(Icons.explore),
             label: 'Quest',
           ),
-          NavigationDestination(
+          const NavigationDestination(
             icon: Icon(Icons.history_outlined),
             selectedIcon: Icon(Icons.history),
             label: 'History',
           ),
-          NavigationDestination(
+          const NavigationDestination(
             icon: Icon(Icons.emoji_events_outlined),
             selectedIcon: Icon(Icons.emoji_events),
             label: 'Rewards',
           ),
           NavigationDestination(
+            // Badge = friend requests waiting for you.
+            icon: Badge(
+              key: const Key('friends_badge'),
+              isLabelVisible: requests > 0,
+              label: Text('$requests'),
+              child: const Icon(Icons.group_outlined),
+            ),
+            selectedIcon: const Icon(Icons.group),
+            label: 'Friends',
+          ),
+          const NavigationDestination(
             icon: Icon(Icons.person_outline),
             selectedIcon: Icon(Icons.person),
             label: 'Account',

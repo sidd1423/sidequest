@@ -1,5 +1,11 @@
 # Add `flutter_lints` later (flutter pub add --dev flutter_lints) and include it here.
 analyzer:
+  exclude:
+    - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
   language:
     strict-casts: true
 linter:

@@ -208,9 +208,11 @@ def test_skipped_feedback(lib, tmp_path):
     path.write_bytes(lib.read_bytes())
     library.init_library(path)
     library.add_generated(9, "u1", Quest.model_validate(QUEST), path=path)
-    library.record_feedback(9, FeedbackIn(completed=False, rating=3, comment="rained"), path=path)
+    library.record_feedback(9, FeedbackIn(completed=False, rating=3, comment="rained", time_logged_minutes=4),
+                            path=path)
     [g] = _rows(path, "app_quest_id = 9")
-    assert (g["status"], g["completed"], g["rating"], g["time_logged_minutes"]) == ("skipped", 0, None, 0)
+    # unfinished quests keep their rating and partial time
+    assert (g["status"], g["completed"], g["rating"], g["time_logged_minutes"]) == ("skipped", 0, 3, 4)
     assert library.record_feedback(999, FeedbackIn(completed=False), path=path) is False
 
 

@@ -118,7 +118,7 @@ def test_prompt_groups_recent_quests():
     loved_at, hated_at = prompt.index("Loved"), prompt.index("DISLIKED")
     assert loved_at < prompt.index("Sunrise Puddle Photos") < hated_at < prompt.index("Leaf Rubbing Walk")
     assert 'said: "too slow"' in prompt and "took 8 min" in prompt
-    assert "Skipped" in prompt and "Stair Sprint" in prompt
+    assert "Didn't finish, no rating" in prompt and "Stair Sprint" in prompt
     assert "not done yet" in prompt and "Bench Bird Count" in prompt
     assert "first quest" not in prompt
 
@@ -190,4 +190,63 @@ def test_api_history_end_to_end(tmp_path):
     # every generated quest still goes into the quest library too
     conn = sqlite3.connect(lib)
     assert conn.execute("select count(*) from quests where source = 'generated'").fetchone()[0] == 13
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Rating quests you didn't finish
+# ---------------------------------------------------------------------------
+
+UNFINISHED_HATED = past("Leaf Rubbing Walk", tags=("nature", "plants", "learning"), status="skipped",
+                        completed=False, rating=1, comment="gave up, boring", time_logged_minutes=3)
+UNFINISHED_LOVED = past("Sunset Cloud Spotting", tags=("nature", "sky"), status="skipped",
+                        completed=False, rating=5, comment="loved it, ran out of time")
+
+
+def test_unfinished_ratings_count():
+    assert UNFINISHED_HATED.disliked and not UNFINISHED_HATED.loved
+    assert UNFINISHED_LOVED.loved and not UNFINISHED_LOVED.disliked
+    prompt = build_prompt(PROFILE, recent_quests=[UNFINISHED_HATED, UNFINISHED_LOVED])
+    loved = prompt.split("Loved")[1].split("DISLIKED")[0]
+    disliked = prompt.split("DISLIKED")[1]
+    assert "Sunset Cloud Spotting" in loved and "didn't finish" in loved
+    assert "Leaf Rubbing Walk" in disliked and "gave up, boring" in disliked
+    assert "no rating" not in prompt
+
+
+def test_unfinished_disliked_quest_is_avoided():
+    near_copy = {**QUEST, "title": "Leaf Collector", "tags": ["nature", "plants", "outdoor"]}
+    llm = FakeLLM(json.dumps(near_copy), json.dumps(DIFFERENT_QUEST))
+    assert generate_quest(PROFILE, recent_quests=[UNFINISHED_HATED], llm=llm).title == DIFFERENT_QUEST["title"]
+
+
+def test_api_rates_unfinished_quest_everywhere():
+    from fastapi.testclient import TestClient
+
+    from backend.main import app, get_llm, get_retriever
+
+    llm = FakeLLM(json.dumps(QUEST), json.dumps(DIFFERENT_QUEST))
+    app.dependency_overrides[get_llm] = lambda: llm
+    app.dependency_overrides[get_retriever] = lambda: None
+    try:
+        with TestClient(app) as c:
+            c.put("/users/gowtham/preferences", json=VALID)
+            qid = c.post("/users/gowtham/quests").json()["id"]
+            r = c.post(f"/users/gowtham/quests/{qid}/feedback",
+                       json={"completed": False, "rating": 2, "comment": "too cold", "time_logged_minutes": 5})
+            assert r.status_code == 200 and r.json()["status"] == "skipped"
+            assert r.json()["feedback"]["rating"] == 2
+            # rating is optional when you didn't finish
+            assert c.post("/users/gowtham/quests").status_code == 201
+            qid2 = c.get("/users/gowtham/quests").json()[0]["id"]
+            assert c.post(f"/users/gowtham/quests/{qid2}/feedback", json={"completed": False}).status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+
+    assert "DISLIKED" in llm.prompts[1] and "too cold" in llm.prompts[1]
+    [h] = [r for r in rows(os.environ["HISTORY_PATH"]) if r["app_quest_id"] == qid]
+    assert (h["status"], h["rating"], h["time_logged_minutes"]) == ("skipped", 2, 5)
+    conn = sqlite3.connect(os.environ["LIBRARY_PATH"])
+    assert conn.execute("select rating, time_logged_minutes from quests where app_quest_id = ?",
+                        (qid,)).fetchone() == (2, 5)
     conn.close()

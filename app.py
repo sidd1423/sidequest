@@ -338,39 +338,55 @@ def render_quest(record: dict) -> None:
             st.caption(" · ".join(f"#{t}" for t in q["tags"]))
 
 
+RATING_OPTIONS = [0, 1, 2, 3, 4, 5]
+RATING_LABELS = {0: "Not rated", **STARS}
+
+
+def feedback_summary(rec: dict) -> str:
+    """One-line status for a quest that already has feedback."""
+    fb = rec.get("feedback") or {}
+    parts = ["✅ Completed" if rec["status"] == "completed" else "⏭️ Didn't finish"]
+    if fb.get("rating"):
+        parts.append(STARS[fb["rating"]])
+    if fb.get("time_logged_minutes"):
+        parts.append(f"{fb['time_logged_minutes']} min logged")
+    return " · ".join(parts)
+
+
 def feedback_form(record: dict) -> None:
-    with st.form(f"feedback_{record['id']}"):
+    """Not an st.form, so the time field can react to the completed/didn't-finish choice."""
+    qid = record["id"]
+    with st.container(border=True):
         st.markdown("**How did it go?**")
         outcome = st.radio(
             "Did you do this quest?",
-            ["Completed it", "Skipped it"],
+            ["Completed it", "Didn't finish / skipped"],
             horizontal=True,
-            key=f"outcome_{record['id']}",
+            key=f"outcome_{qid}",
         )
+        completed = outcome == "Completed it"
         rating = st.select_slider(
-            "Rating (only used if completed)",
-            options=list(STARS),
+            "Rating - you can rate it even if you didn't finish",
+            options=RATING_OPTIONS,
             value=4,
-            format_func=STARS.get,
-            key=f"rating_{record['id']}",
+            format_func=RATING_LABELS.get,
+            key=f"rating_{qid}",
         )
         time_spent = st.number_input(
-            "Time spent (minutes, if completed)",
+            "Time spent (minutes)" if completed else "Time spent before stopping (minutes, 0 if you didn't start)",
             min_value=0, max_value=1440, step=5,
-            value=int(record["quest"]["estimated_minutes"]),
-            key=f"time_{record['id']}",
+            value=int(record["quest"]["estimated_minutes"]) if completed else 0,
+            key=f"time_{qid}_{'done' if completed else 'stopped'}",
         )
         comment = st.text_input(
             "Comment (optional)",
-            placeholder="What did you like or dislike?",
-            key=f"comment_{record['id']}",
+            placeholder="What did you like or dislike?" if completed else "Why didn't it work out?",
+            key=f"comment_{qid}",
         )
-        if st.form_submit_button("Send feedback", use_container_width=True):
-            completed = outcome == "Completed it"
+        if st.button("Send feedback", key=f"send_{qid}", use_container_width=True):
             try:
                 api_client.send_feedback(
-                    user_id, record["id"], completed, rating if completed else None, comment.strip(),
-                    int(time_spent) if completed else 0,
+                    user_id, qid, completed, rating or None, comment.strip(), int(time_spent),
                 )
             except BackendError as e:
                 st.error(f"Couldn't send feedback: {e}")
@@ -407,22 +423,13 @@ else:
         if latest["status"] == "suggested":
             feedback_form(latest)
         else:
-            fb = latest.get("feedback") or {}
-            done = "✅ Completed" + (f" · {STARS[fb['rating']]}" if fb.get("rating") else "")
-            if fb.get("time_logged_minutes"):
-                done += f" · {fb['time_logged_minutes']} min logged"
-            st.caption(done if latest["status"] == "completed" else "⏭️ Skipped")
+            st.caption(feedback_summary(latest))
 
         if len(quests) > 1:
             with st.expander(f"Quest history ({len(quests) - 1} earlier)"):
                 for rec in quests[1:]:
                     fb = rec.get("feedback") or {}
-                    status_txt = {
-                        "completed": f"✅ {STARS.get(fb.get('rating'), '')}"
-                        + (f" · {fb['time_logged_minutes']} min" if fb.get("time_logged_minutes") else ""),
-                        "skipped": "⏭️ skipped",
-                        "suggested": "🕒 no feedback yet",
-                    }[rec["status"]]
+                    status_txt = "🕒 no feedback yet" if rec["status"] == "suggested" else feedback_summary(rec)
                     st.markdown(f"**{rec['quest']['title']}** - {status_txt}")
                     if fb.get("comment"):
                         st.caption(f"\u201c{fb['comment']}\u201d")

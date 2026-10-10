@@ -69,7 +69,7 @@ def test_examples_and_feedback_reach_prompt():
     )
     prompt = build_prompt(PROFILE, [example], [fb])
     assert "Sunset Sketch Session" in prompt
-    assert "Island Ferry Hop [skipped / not completed]" in prompt
+    assert "Island Ferry Hop [didn't finish]" in prompt
     assert "too far away" in prompt
     assert "first quest" not in prompt
 

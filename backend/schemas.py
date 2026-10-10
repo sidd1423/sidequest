@@ -266,7 +266,10 @@ class FeedbackIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     completed: bool
-    rating: int | None = Field(None, ge=1, le=5, description="1 = hated it, 5 = loved it")
+    rating: int | None = Field(
+        None, ge=1, le=5,
+        description="1 = hated it, 5 = loved it. Required if completed, optional if not finished",
+    )
     comment: str = Field("", max_length=500)
     time_logged_minutes: int | None = Field(
         None, ge=0, le=1440, description="How long the user actually spent on the quest"
@@ -318,10 +321,11 @@ class PastQuest(BaseModel):
     time_logged_minutes: int = 0
     created_at: datetime | None = None
 
+    # Ratings count whether or not the user finished the quest.
     @property
     def loved(self) -> bool:
-        return bool(self.completed) and (self.rating or 0) >= 4
+        return (self.rating or 0) >= 4
 
     @property
     def disliked(self) -> bool:
-        return bool(self.completed) and self.rating is not None and self.rating <= 2
+        return self.rating is not None and self.rating <= 2

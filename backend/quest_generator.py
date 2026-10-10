@@ -55,7 +55,7 @@ def _feedback_block(feedback: Sequence[FeedbackEntry]) -> str:
         if f.completed:
             status = f"completed, rated {f.rating}/5"
         else:
-            status = "skipped / not completed"
+            status = "didn't finish" + (f", rated {f.rating}/5" if f.rating else "")
         comment = f' - "{f.comment}"' if f.comment else ""
         lines.append(f"- {f.quest_title} [{status}]{comment}")
     return "\n".join(lines)
@@ -68,6 +68,8 @@ def _recent_block(recent: Sequence[PastQuest]) -> str:
         if q.tags:
             bits.append("tags: " + ", ".join(q.tags))
         extra = []
+        if q.status.value == "skipped":
+            extra.append("didn't finish")
         if q.rating:
             extra.append(f"rated {q.rating}/5")
         if q.time_logged_minutes:
@@ -82,9 +84,9 @@ def _recent_block(recent: Sequence[PastQuest]) -> str:
          [q for q in recent if q.loved]),
         ("DISLIKED (rated 1-2) - make the new quest clearly DIFFERENT from these: a different kind of "
          "activity, not just a new name", [q for q in recent if q.disliked]),
-        ("Rated OK (3)", [q for q in recent if q.completed and q.rating == 3]),
-        ("Skipped - probably not appealing; try a different angle",
-         [q for q in recent if q.status.value == "skipped"]),
+        ("Rated OK (3)", [q for q in recent if q.rating == 3]),
+        ("Didn't finish, no rating - probably not appealing; try a different angle",
+         [q for q in recent if q.status.value == "skipped" and q.rating is None]),
         ("Suggested but not done yet - do not repeat", [q for q in recent if q.status.value == "suggested"]),
     ]
     out = []

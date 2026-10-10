@@ -304,7 +304,7 @@ def record_feedback(app_quest_id: int, feedback: FeedbackIn, path: Path | None =
             WHERE app_quest_id = ? AND source = 'generated'
             """,
             ("completed" if feedback.completed else "skipped", int(feedback.completed),
-             feedback.rating if feedback.completed else None, feedback.comment or None,
+             feedback.rating, feedback.comment or None,
              feedback.time_logged_minutes or 0, _now(), app_quest_id),
         )
         conn.commit()

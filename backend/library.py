@@ -122,6 +122,20 @@ def _connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def delete_user(user_id: str, path: Path | None = None) -> int:
+    """Remove a deleted account's generated quests (seed quests are untouched)."""
+    path = Path(path or library_path())
+    if not path.exists():
+        return 0
+    conn = _connect(path)
+    try:
+        n = conn.execute("DELETE FROM quests WHERE source = 'generated' AND user_id = ?", (user_id,)).rowcount
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+
 def migrate(conn: sqlite3.Connection) -> bool:
     """Bring an older library (without the generated/feedback columns) up to
     date, keeping every existing row. Returns True if it migrated."""

@@ -11,10 +11,10 @@ import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import Body, Depends, FastAPI, HTTPException, Query, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import auth, db, history, library, retrieval, taste as taste_mod
+from . import auth, db, history, journal, library, retrieval, taste as taste_mod
 from .llm import GemmaClient, LLMClient, LLMError
 from .quest_generator import generate_quest
 from .schemas import (
@@ -36,6 +36,7 @@ log = logging.getLogger("sidequest.api")
 async def lifespan(_: FastAPI):
     db.init_db()
     auth.init_auth()
+    journal.init_journal()
     if not os.getenv("GEMMA_API_KEY") and "googleapis" in os.getenv(
         "GEMMA_BASE_URL", "https://generativelanguage.googleapis.com"
     ):
@@ -103,6 +104,22 @@ def me(user: auth.UserOut = Depends(auth.current_user)) -> auth.UserOut:
 @app.patch("/auth/me", response_model=auth.UserOut)
 def update_me(changes: auth.AccountUpdate, user: auth.UserOut = Depends(auth.current_user)) -> auth.UserOut:
     return auth.update_user(user.id, changes)
+
+
+@app.delete("/auth/me", status_code=status.HTTP_204_NO_CONTENT)
+def delete_me(confirm: auth.DeleteAccountIn, user: auth.UserOut = Depends(auth.current_user)) -> None:
+    """Delete the account and ALL its data (preferences, quests, feedback,
+    journal, history, generated quests in the library). Needs the password."""
+    if not auth.password_matches(user.id, confirm.password):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Wrong password")
+    db.delete_user_data(user.id)
+    for cleanup in (library.delete_user, history.delete_user):
+        try:
+            cleanup(user.id)
+        except Exception as exc:
+            log.warning("Couldn't remove %s's data via %s: %s", user.id, cleanup.__module__, exc)
+    auth.delete_user(user.id)
+    log.info("Deleted account %s", user.id)
 
 
 # ---------------------------------------------------------------------------
@@ -237,3 +254,36 @@ def give_feedback(feedback: FeedbackIn, quest_id: int, user_id: str = UserId) ->
     except Exception as exc:
         log.warning("Couldn't store feedback for quest %s in the user history: %s", quest_id, exc)
     return record
+
+
+@app.get("/users/{user_id}/stats")
+def read_stats(user_id: str = UserId) -> dict[str, int]:
+    """{completed, generated, minutes_outside} - the counter on the app's Quest screen."""
+    return db.quest_stats(user_id)
+
+
+# ---------------------------------------------------------------------------
+# Quest journal (notes + photos)
+# ---------------------------------------------------------------------------
+
+@app.get("/users/{user_id}/quests/{quest_id}/logs", response_model=list[journal.LogOut])
+def read_logs(quest_id: int, user_id: str = UserId) -> list[journal.LogOut]:
+    return journal.list_for_quest(user_id, quest_id)
+
+
+@app.post("/users/{user_id}/quests/{quest_id}/logs", response_model=journal.LogOut,
+          status_code=status.HTTP_201_CREATED)
+def add_log(entry: journal.LogIn, quest_id: int, user_id: str = UserId) -> journal.LogOut:
+    """Add a note or photo. Same client_id again = update (safe to retry)."""
+    return journal.add(user_id, quest_id, entry)
+
+
+@app.get("/users/{user_id}/logs/{log_id}/photo")
+def read_photo(log_id: int, user_id: str = UserId) -> Response:
+    data, mime = journal.photo(user_id, log_id)
+    return Response(content=data, media_type=mime, headers={"Cache-Control": "private, max-age=86400"})
+
+
+@app.delete("/users/{user_id}/logs/{client_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_log(client_id: str, user_id: str = UserId) -> None:
+    journal.delete(user_id, client_id)  # already gone is fine (offline retries)

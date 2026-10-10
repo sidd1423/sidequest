@@ -258,7 +258,7 @@ class Quest(BaseModel):
     tags: list[str] = Field(default_factory=list, max_length=8)
     accessibility_notes: str = Field("", max_length=400)
     weather_backup: str = Field("", max_length=400, description="Outdoor plan B if the weather turns")
-    why_it_fits: str = Field("", max_length=400)
+    why_it_fits: str = Field("", max_length=400)  # no longer requested from Gemma; kept for old quests
 
     @field_validator("tags")
     @classmethod

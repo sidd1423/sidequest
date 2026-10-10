@@ -213,6 +213,20 @@ def record_feedback(app_quest_id: int, feedback: FeedbackIn, path: Path | None =
         conn.close()
 
 
+def delete_user(user_id: str, path: Path | None = None) -> int:
+    """Remove a deleted account's quest history."""
+    path = Path(path or history_path())
+    if not path.exists():
+        return 0
+    conn = _connect(path)
+    try:
+        n = conn.execute("DELETE FROM user_quest_history WHERE user_id = ?", (user_id,)).rowcount
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+
 def recent(user_id: str, limit: int = MAX_PER_USER, path: Path | None = None) -> list[PastQuest]:
     """The user's most recent sidequests (newest first) with their feedback."""
     path = Path(path or history_path())

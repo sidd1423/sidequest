@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
 import '../models/account.dart';
 import '../models/generated_quest.dart';
+import '../models/journal_entry.dart';
 import '../models/profile_preferences.dart';
 import '../models/quest_record.dart';
 import 'api_client.dart';
@@ -18,7 +20,8 @@ import 'key_value_store.dart';
 ///   into your account with no connection.
 /// - Your profile and quest history are cached on the device and shown from
 ///   the cache; they refresh from the server whenever it's reachable.
-/// - Changes made offline (preferences, quest feedback) are saved locally
+/// - Changes made offline (preferences, quest feedback, journal notes and
+///   photos) are saved locally
 ///   right away and queued in an *outbox*, then sent when back online
 ///   ([sync] runs on app start, when the app comes back to the foreground,
 ///   on pull-to-refresh, and after any request that reaches the server).
@@ -37,6 +40,7 @@ class AppState extends ChangeNotifier {
   final KeyValueStore _secure;
 
   static const _sessionKey = 'session';
+  static const _cacheNames = ['profile', 'quests', 'outbox', 'meta', 'journal'];
 
   Session? _session;
   ProfilePreferences? _profile;
@@ -46,6 +50,10 @@ class AppState extends ChangeNotifier {
   Future<void>? _syncInFlight;
   bool _sessionExpired = false;
   String? _lastSyncError;
+  int _completedCount = 0;
+  int? _activeQuestId;
+  Map<int, List<JournalEntry>> _journals = {};
+  final Map<String, Uint8List> _photoCache = {}; // downloaded photos, by client id (memory only)
 
   Session? get session => _session;
   Account? get account => _session?.account;
@@ -56,6 +64,20 @@ class AppState extends ChangeNotifier {
 
   /// Newest first.
   List<QuestRecord> get quests => List.unmodifiable(_quests);
+
+  /// Total quests completed (the counter on the Quest screen).
+  int get completedCount => _completedCount;
+
+  /// The quest currently shown on the Quest screen (generated, not completed yet).
+  QuestRecord? get activeQuest {
+    final id = _activeQuestId;
+    if (id == null) return null;
+    final matches = _quests.where((q) => q.id == id && q.status != QuestStatus.completed);
+    return matches.isEmpty ? null : matches.first; // completed (maybe on another device) = gone
+  }
+
+  /// Notes and photos for a quest, oldest first.
+  List<JournalEntry> journal(int questId) => List.unmodifiable(_journals[questId] ?? const <JournalEntry>[]);
 
   /// Last request reached the server.
   bool get isOnline => _online;
@@ -97,12 +119,15 @@ class AppState extends ChangeNotifier {
     } on Object {
       // Corrupt cache (e.g. from an older app version): start clean, the
       // server copy is pulled on the next sync.
-      for (final name in ['profile', 'quests', 'outbox']) {
+      for (final name in _cacheNames) {
         await _cache.delete(_key(name));
       }
       _profile = null;
       _quests = const [];
       _outbox = [];
+      _completedCount = 0;
+      _activeQuestId = null;
+      _journals = {};
     }
   }
 
@@ -117,13 +142,36 @@ class AppState extends ChangeNotifier {
     _outbox = outbox == null
         ? []
         : [for (final op in jsonDecode(outbox) as List<dynamic>) op as Map<String, dynamic>];
+    final meta = await _cache.read(_key('meta'));
+    final m = meta == null ? const <String, dynamic>{} : jsonDecode(meta) as Map<String, dynamic>;
+    _completedCount = (m['completed'] as num?)?.toInt() ?? 0;
+    _activeQuestId = (m['active_quest'] as num?)?.toInt();
+    final journal = await _cache.read(_key('journal'));
+    _journals = {};
+    if (journal != null) {
+      for (final e in jsonDecode(journal) as List<dynamic>) {
+        final entry = JournalEntry.fromJson(e as Map<String, dynamic>);
+        _journals.putIfAbsent(entry.questId, () => []).add(entry);
+      }
+    }
   }
 
   Future<void> _saveCache() async {
-    if (_session == null) return;
-    if (_profile != null) await _cache.write(_key('profile'), jsonEncode(_profile!.toJson()));
-    await _cache.write(_key('quests'), jsonEncode([for (final q in _quests) q.toJson()]));
-    await _cache.write(_key('outbox'), jsonEncode(_outbox));
+    final session = _session;
+    if (session == null) return;
+    // Snapshot first, so a logout half-way through can't mix accounts.
+    final id = session.account.id;
+    final values = <String, String>{
+      if (_profile != null) 'profile:$id': jsonEncode(_profile!.toJson()),
+      'quests:$id': jsonEncode([for (final q in _quests) q.toJson()]),
+      'outbox:$id': jsonEncode(_outbox),
+      'meta:$id': jsonEncode({'completed': _completedCount, 'active_quest': _activeQuestId}),
+      'journal:$id': jsonEncode([for (final list in _journals.values) for (final e in list) e.toJson()]),
+    };
+    for (final entry in values.entries) {
+      if (_session?.token != session.token) return; // logged out meanwhile - don't write it back
+      await _cache.write(entry.key, entry.value);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -160,15 +208,35 @@ class AppState extends ChangeNotifier {
     } on Object {
       // Offline or already expired - the token is forgotten locally anyway.
     }
-    for (final name in ['profile', 'quests', 'outbox']) {
+    await _forget(session);
+  }
+
+  /// Delete the account and everything in it, on the server and this device.
+  /// Needs a connection and the password. Throws [ApiException] (403 = wrong
+  /// password) or [OfflineException].
+  Future<void> deleteAccount(String password) async {
+    final session = _session;
+    if (session == null) return;
+    await _call(() => api.delete('/auth/me', {'password': password}));
+    await _forget(session);
+  }
+
+  /// Remove this account's session and cached data from the device.
+  Future<void> _forget(Session session) async {
+    // Forget the session first so a running sync stops writing this account's cache.
+    api.token = null;
+    _session = null;
+    for (final name in _cacheNames) {
       await _cache.delete('$name:${session.account.id}');
     }
     await _secure.delete(_sessionKey);
-    api.token = null;
-    _session = null;
     _profile = null;
     _quests = const [];
     _outbox = [];
+    _completedCount = 0;
+    _activeQuestId = null;
+    _journals = {};
+    _photoCache.clear();
     _sessionExpired = false;
     _lastSyncError = null;
     notifyListeners();
@@ -207,6 +275,12 @@ class AppState extends ChangeNotifier {
   Future<void> sendFeedback(int questId, QuestFeedback feedback) async {
     _outbox.removeWhere((op) => op['type'] == 'feedback' && op['quest_id'] == questId);
     _outbox.add({'type': 'feedback', 'quest_id': questId, 'body': feedback.toJson()});
+    final before = _quests.where((q) => q.id == questId);
+    final wasCompleted = before.isNotEmpty && before.first.status == QuestStatus.completed;
+    if (feedback.completed && !wasCompleted) _completedCount++;
+    if (!feedback.completed && wasCompleted && _completedCount > 0) _completedCount--;
+    // A completed quest leaves the Quest screen (it's in History now).
+    if (feedback.completed && _activeQuestId == questId) _activeQuestId = null;
     _quests = [for (final q in _quests) q.id == questId ? q.withFeedback(feedback, pending: true) : q];
     await _saveCache();
     notifyListeners();
@@ -227,9 +301,106 @@ class AppState extends ChangeNotifier {
     );
     final record = QuestRecord.fromJson(json as Map<String, dynamic>, distanceKm: settings.distanceKm);
     _quests = [record, ..._quests.where((q) => q.id != record.id)];
+    _activeQuestId = record.id;
     await _saveCache();
     notifyListeners();
     return record;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Journal: notes and photos (work offline)
+  // ---------------------------------------------------------------------------
+
+  static final _random = Random.secure();
+
+  static String _newClientId() {
+    final rand = List.generate(8, (_) => _random.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+    return 'c${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}$rand';
+  }
+
+  Future<void> addNote(int questId, String text) =>
+      _addEntry(JournalEntry(clientId: _newClientId(), questId: questId, kind: 'note', text: text.trim(),
+          createdAt: DateTime.now(), pending: true));
+
+  /// [bytes] should already be resized (the picker does that); max 5 MB.
+  Future<void> addPhoto(int questId, Uint8List bytes, String mime, {String caption = ''}) =>
+      _addEntry(JournalEntry(clientId: _newClientId(), questId: questId, kind: 'photo', text: caption.trim(),
+          mime: mime, localImageBase64: base64Encode(bytes), createdAt: DateTime.now(), pending: true));
+
+  Future<void> _addEntry(JournalEntry entry) async {
+    _journals.putIfAbsent(entry.questId, () => []).add(entry);
+    _outbox.add({'type': 'log', 'quest_id': entry.questId, 'client_id': entry.clientId});
+    await _saveCache();
+    notifyListeners();
+    unawaited(sync(refresh: false));
+  }
+
+  Future<void> deleteJournalEntry(JournalEntry entry) async {
+    _journals[entry.questId]?.removeWhere((e) => e.clientId == entry.clientId);
+    _outbox.removeWhere((op) => op['type'] == 'log' && op['client_id'] == entry.clientId);
+    // Always tell the server: the upload may already be on its way. Deleting
+    // something it never got is harmless.
+    _outbox.add({'type': 'log_delete', 'client_id': entry.clientId});
+    _photoCache.remove(entry.clientId);
+    await _saveCache();
+    notifyListeners();
+    unawaited(sync(refresh: false));
+  }
+
+  /// Pull a quest's journal from the server (e.g. made on another device).
+  /// Entries not uploaded yet stay. Quietly does nothing offline.
+  Future<void> loadJournal(int questId) async {
+    if (_session == null) return;
+    final userId = _session!.account.id;
+    try {
+      final list = await _call(() => api.get('/users/$userId/quests/$questId/logs')) as List<dynamic>;
+      final local = {for (final e in _journals[questId] ?? const <JournalEntry>[]) e.clientId: e};
+      final deleting = {for (final op in _outbox) if (op['type'] == 'log_delete') op['client_id'] as String};
+      final merged = <JournalEntry>[];
+      for (final item in list) {
+        final server = JournalEntry.fromServer(item as Map<String, dynamic>);
+        if (deleting.contains(server.clientId)) continue; // deleted here, not on the server yet
+        local.remove(server.clientId);
+        merged.add(server);
+      }
+      merged.addAll(local.values.where((e) => e.pending)); // not uploaded yet
+      merged.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      _journals[questId] = merged;
+      await _saveCache();
+      notifyListeners();
+    } on OfflineException {
+      // show what's cached
+    } on ApiException {
+      // e.g. quest gone - show what's cached
+    }
+  }
+
+  /// A photo's bytes: from the device if we have them, else downloaded once.
+  Future<Uint8List?> photoBytes(JournalEntry entry) async {
+    final local = entry.localImage;
+    if (local != null) return local;
+    final cached = _photoCache[entry.clientId];
+    if (cached != null) return cached;
+    if (entry.serverId == null || _session == null) return null;
+    try {
+      final bytes = await api.getBytes('/users/${_session!.account.id}/logs/${entry.serverId}/photo');
+      _photoCache[entry.clientId] = bytes;
+      return bytes;
+    } on Object {
+      return null; // offline or deleted - the UI shows a placeholder
+    }
+  }
+
+  JournalEntry? _entry(int questId, String clientId) {
+    final matches = (_journals[questId] ?? const <JournalEntry>[]).where((e) => e.clientId == clientId);
+    return matches.isEmpty ? null : matches.first;
+  }
+
+  void _replaceEntry(JournalEntry updated) {
+    final list = _journals[updated.questId];
+    if (list == null) return;
+    final i = list.indexWhere((e) => e.clientId == updated.clientId);
+    if (i >= 0) list[i] = updated;
   }
 
   /// Send queued changes, then (if [refresh]) pull the latest profile and
@@ -264,6 +435,18 @@ class AppState extends ChangeNotifier {
             await _call(() => api.put('/users/$userId/preferences', op['body']));
           } else if (op['type'] == 'feedback') {
             await _call(() => api.post('/users/$userId/quests/${op['quest_id']}/feedback', op['body']));
+          } else if (op['type'] == 'log') {
+            final entry = _entry(op['quest_id'] as int, op['client_id'] as String);
+            if (entry != null) {
+              final json = await _call(
+                () => api.post('/users/$userId/quests/${entry.questId}/logs', entry.toUpload()),
+              ) as Map<String, dynamic>;
+              final image = entry.localImage;
+              if (image != null) _photoCache[entry.clientId] = image; // still shows this session
+              _replaceEntry(entry.uploaded((json['id'] as num).toInt()));
+            }
+          } else if (op['type'] == 'log_delete') {
+            await _call(() => api.delete('/users/$userId/logs/${op['client_id']}'));
           }
         } on ApiException catch (e) {
           // Retry later: expired session, rate limits, timeouts, server trouble.
@@ -305,6 +488,7 @@ class AppState extends ChangeNotifier {
       if (e.statusCode != 404) rethrow; // 404 = not set up yet (keep any local copy)
     }
     final list = await _call(() => api.get('/users/$userId/quests?limit=50')) as List<dynamic>;
+    final stats = await _call(() => api.get('/users/$userId/stats')) as Map<String, dynamic>;
     if (_session?.token != session.token) return; // logged out while we were waiting
 
     // A preferences edit queued meanwhile wins over what the server had.
@@ -317,13 +501,21 @@ class AppState extends ChangeNotifier {
         if (op['type'] == 'feedback') op['quest_id'] as int: QuestFeedback.fromJson(op['body'] as Map<String, dynamic>),
     };
     final fresh = <QuestRecord>[];
+    var completed = (stats['completed'] as num?)?.toInt() ?? _completedCount;
     for (final item in list) {
       final json = item as Map<String, dynamic>;
       final q = QuestRecord.fromJson(json, distanceKm: distances[(json['id'] as num).toInt()]);
       final local = pending[q.id];
+      if (local != null) {
+        // Feedback not on the server yet still counts.
+        final serverCompleted = q.status == QuestStatus.completed;
+        if (local.completed && !serverCompleted) completed++;
+        if (!local.completed && serverCompleted) completed--;
+      }
       fresh.add(local == null ? q : q.withFeedback(local, pending: true));
     }
     _quests = fresh;
+    _completedCount = completed < 0 ? 0 : completed;
   }
 
   /// Runs a request, tracking online/offline and expired sessions.

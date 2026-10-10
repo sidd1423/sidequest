@@ -28,6 +28,15 @@ first if changes haven't synced). Logic: `lib/data/app_state.dart`.
 - **Generate** asks the backend, which asks Gemma with your profile, these
   settings, 3 example quests and your feedback (see "Feedback loop" in the
   main README). Ratings you send shape the next quest.
+- A counter at the top of the Quest tab shows how many quests you've completed.
+- Under the quest card, the **Quest log** takes notes and photos (camera on
+  phones, file picker on desktop/web). They save offline and upload later;
+  you can add more from the quest's page in History.
+- Completing a quest removes it from the Quest tab (it's in History). An
+  unfinished one stays until you generate another. The current quest survives
+  app restarts.
+- **Account > Delete account** (needs your password and a connection) deletes
+  everything on the server and the device.
 - The quest card appears only after tapping **Generate**, with the
   "How did it go?" rating form underneath (completed / didn't finish, stars -
   required only if completed - time spent, comment).

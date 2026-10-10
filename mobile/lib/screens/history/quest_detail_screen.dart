@@ -3,12 +3,14 @@ import 'package:flutter/material.dart';
 import '../../data/app_scope.dart';
 import '../../models/generated_quest.dart';
 import '../../models/quest_record.dart';
+import '../../widgets/quest_journal.dart';
 import '../quest/quest_card.dart';
 import '../quest/quest_feedback_form.dart';
 import 'quest_history_screen.dart';
 
-/// One past quest: the full quest card, how it went, and a rating form if
-/// you haven't rated it yet (works offline - syncs later).
+/// One past quest: the full quest card, its quest log (notes + photos), how
+/// it went, and a rating form if you haven't rated it yet (all work offline -
+/// they sync later).
 /// Pushed on the root navigator, so it has a back button instead of the bottom bar.
 class QuestDetailScreen extends StatelessWidget {
   const QuestDetailScreen({super.key, required this.questId});
@@ -29,6 +31,8 @@ class QuestDetailScreen extends StatelessWidget {
               padding: const EdgeInsets.all(16),
               children: [
                 QuestCard(quest: record.quest),
+                const SizedBox(height: 16),
+                QuestJournal(questId: record.id),
                 const SizedBox(height: 16),
                 if (record.feedback == null)
                   QuestFeedbackForm(

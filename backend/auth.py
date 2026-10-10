@@ -220,6 +220,24 @@ def update_user(user_id: str, changes: AccountUpdate) -> UserOut:
     return user
 
 
+class DeleteAccountIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    password: str = Field(..., max_length=256)
+
+
+def delete_user(user_id: str) -> None:
+    with db.connect() as conn:
+        conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+
+
+def password_matches(user_id: str, password: str) -> bool:
+    with db.connect() as conn:
+        row = conn.execute("SELECT password_hash FROM users WHERE id = ?", (user_id,)).fetchone()
+    return row is not None and verify_password(password, row["password_hash"])
+
+
 def create_session(user: UserOut) -> SessionOut:
     token = secrets.token_urlsafe(32)
     now = _now()

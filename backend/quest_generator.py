@@ -34,8 +34,7 @@ QUEST_JSON_SHAPE = """{
   "energy_required": 3,
   "tags": ["nature", "photography"],
   "accessibility_notes": "how this quest accommodates the user's needs (or empty)",
-  "weather_backup": "a quick OUTDOOR alternative if the weather turns (e.g. under a covered spot)",
-  "why_it_fits": "one sentence on why this matches the user - mention what in their feedback shaped it, if any"
+  "weather_backup": "a quick OUTDOOR alternative if the weather turns (e.g. under a covered spot)"
 }"""
 
 

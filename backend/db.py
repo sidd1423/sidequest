@@ -109,6 +109,29 @@ def delete_preferences(user_id: str) -> bool:
     return cur.rowcount > 0
 
 
+def delete_user_data(user_id: str) -> None:
+    """Everything this user has in the main database (account deletion)."""
+    with connect() as conn:
+        conn.execute("DELETE FROM user_preferences WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM quests WHERE user_id = ?", (user_id,))
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'quest_logs'").fetchone():
+            conn.execute("DELETE FROM quest_logs WHERE user_id = ?", (user_id,))
+
+
+def quest_stats(user_id: str) -> dict[str, int]:
+    """Totals for the Quest screen counter."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT status, feedback FROM quests WHERE user_id = ?", (user_id,)
+        ).fetchall()
+    completed = sum(1 for r in rows if r["status"] == QuestStatus.COMPLETED.value)
+    minutes = 0
+    for r in rows:
+        if r["feedback"]:
+            minutes += FeedbackIn.model_validate_json(r["feedback"]).time_logged_minutes or 0
+    return {"completed": completed, "generated": len(rows), "minutes_outside": minutes}
+
+
 # ---------------------------------------------------------------------------
 # Quests & feedback
 # ---------------------------------------------------------------------------

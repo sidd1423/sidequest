@@ -4,7 +4,7 @@ import '../../data/api_client.dart';
 import '../../data/app_scope.dart';
 import '../../models/generated_quest.dart';
 import '../../models/preference_options.dart';
-import '../../models/quest_record.dart';
+import '../../widgets/quest_journal.dart';
 import '../auth/auth_scaffold.dart' show AuthError;
 import 'quest_card.dart';
 import 'quest_feedback_form.dart';
@@ -13,8 +13,11 @@ import 'quest_feedback_form.dart';
 ///
 /// 1. Pick this quest's settings: minutes, who's with you, difficulty,
 ///    energy, distance.
-/// 2. Tap Generate - only then does the quest card appear.
-/// 3. Rate it under the card ("How did it go?").
+/// 2. Tap Generate - only then does the quest card appear (it stays across
+///    app restarts until you finish it).
+/// 3. Add notes / photos while you're out, then rate it ("How did it go?").
+///    A completed quest leaves this screen (it's in History) and the
+///    "quests completed" counter at the top goes up.
 ///
 /// Interests, accessibility, surroundings and weather come from the profile
 /// (set at sign-up / Edit account). Generating needs a connection (Gemma runs
@@ -33,8 +36,6 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
   double _distanceKm = 1.0;
   String _group = 'solo';
 
-  QuestRecord? _record;
-  QuestFeedback? _feedback;
   bool _generating = false;
   String? _error;
   final _cardKey = GlobalKey();
@@ -45,18 +46,13 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
       _error = null;
     });
     try {
-      final record = await AppScope.read(context).generateQuest(QuestSettings(
+      await AppScope.read(context).generateQuest(QuestSettings(
         minutes: _minutes,
         difficulty: _difficulty,
         energy: _energy.round(),
         distanceKm: _distanceKm,
         group: _group,
       ));
-      if (!mounted) return;
-      setState(() {
-        _record = record;
-        _feedback = null;
-      });
     } on OfflineException catch (e) {
       if (mounted) setState(() => _error = '${e.message} New quests need a connection - your history still works offline.');
     } on ApiException catch (e) {
@@ -64,7 +60,7 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
     } finally {
       if (mounted) setState(() => _generating = false);
     }
-    if (_record == null || _error != null) return;
+    if (!mounted || _error != null) return;
     // Bring the new card into view.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final cardContext = _cardKey.currentContext;
@@ -77,25 +73,26 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
   Future<void> _submitFeedback(QuestFeedback feedback) async {
     final state = AppScope.read(context);
     final messenger = ScaffoldMessenger.of(context);
-    setState(() => _feedback = feedback);
-    await state.sendFeedback(_record!.id, feedback); // saved on the device; sent now or when online
+    final quest = state.activeQuest;
+    if (quest == null) return;
+    await state.sendFeedback(quest.id, feedback); // saved on the device; sent now or when online
+    final synced = state.isOnline ? '' : " It'll sync when you're back online.";
     messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(
-        content: Text(state.isOnline
-            ? 'Thanks! Your next quest will take this into account.'
-            : "Saved - it'll sync when you're back online."),
+        content: Text(feedback.completed
+            ? 'Quest complete! That\'s ${state.completedCount} so far - it\'s in History now.$synced'
+            : 'Thanks! Your next quest will take this into account.$synced'),
       ));
   }
-
-  bool _isPending(int questId) =>
-      AppScope.of(context).quests.any((q) => q.id == questId && q.feedbackPending);
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final record = _record;
+    final state = AppScope.of(context);
+    final record = state.activeQuest; // gone once completed
     final quest = record?.quest;
+    final feedback = record?.feedback;
     Widget heading(String text) => Padding(
           padding: const EdgeInsets.only(top: 20, bottom: 8),
           child: Text(text, style: theme.textTheme.titleMedium),
@@ -107,6 +104,8 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
         key: const Key('quest_generator_screen'),
         padding: const EdgeInsets.all(16),
         children: [
+          _CompletedCounter(count: state.completedCount),
+          const SizedBox(height: 16),
           Text('Got a few minutes?', style: theme.textTheme.headlineSmall),
           const SizedBox(height: 4),
           Text(
@@ -205,7 +204,9 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
             const SizedBox(height: 24),
             QuestCard(key: _cardKey, quest: quest),
             const SizedBox(height: 16),
-            if (_feedback == null)
+            QuestJournal(key: ValueKey('journal_${record.id}'), questId: record.id),
+            const SizedBox(height: 16),
+            if (feedback == null)
               QuestFeedbackForm(
                 // New key per quest so the form resets for each one.
                 key: ValueKey('feedback_form_${record.id}'),
@@ -213,7 +214,7 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
                 onSubmit: _submitFeedback,
               )
             else
-              _FeedbackSummary(feedback: _feedback!, pending: _isPending(record.id)),
+              _FeedbackSummary(feedback: feedback, pending: record.feedbackPending),
           ],
         ],
       ),
@@ -239,6 +240,42 @@ class _FeedbackSummary extends StatelessWidget {
         trailing: pending ? const Tooltip(message: 'Waiting to sync', child: Icon(Icons.schedule)) : null,
         title: Text(parts.join(' · ')),
         subtitle: Text(feedback.comment.isEmpty ? 'Thanks for the feedback!' : '"${feedback.comment}"'),
+      ),
+    );
+  }
+}
+
+/// "N quests completed" at the top of the Quest screen.
+class _CompletedCounter extends StatelessWidget {
+  const _CompletedCounter({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return Card(
+      key: const Key('completed_counter'),
+      color: colors.primaryContainer,
+      elevation: 0,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Icon(Icons.emoji_events, color: colors.onPrimaryContainer, size: 32),
+            const SizedBox(width: 12),
+            Text('$count', key: const Key('completed_count'),
+                style: text.headlineMedium?.copyWith(color: colors.onPrimaryContainer)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                count == 1 ? 'quest completed' : 'quests completed',
+                style: text.titleMedium?.copyWith(color: colors.onPrimaryContainer),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

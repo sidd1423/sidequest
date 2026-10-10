@@ -62,8 +62,25 @@ class ApiClient {
       _send('POST', path, body: body, timeout: timeout);
   Future<dynamic> put(String path, Object? body) => _send('PUT', path, body: body);
   Future<dynamic> patch(String path, Object? body) => _send('PATCH', path, body: body);
+  Future<dynamic> delete(String path, [Object? body]) => _send('DELETE', path, body: body);
+
+  /// Raw bytes (photos). Same auth and errors as the JSON calls.
+  Future<Uint8List> getBytes(String path) async {
+    final response = await _raw('GET', path, null, defaultTimeout);
+    if (response.statusCode >= 200 && response.statusCode < 300) return response.bodyBytes;
+    final text = utf8.decode(response.bodyBytes, allowMalformed: true);
+    throw ApiException(response.statusCode, _detail(text.isEmpty ? null : _tryDecode(text), response));
+  }
 
   Future<dynamic> _send(String method, String path, {Object? body, Duration timeout = defaultTimeout}) async {
+    final response = await _raw(method, path, body, timeout);
+    final text = utf8.decode(response.bodyBytes);
+    final dynamic json = text.isEmpty ? null : _tryDecode(text);
+    if (response.statusCode >= 200 && response.statusCode < 300) return json;
+    throw ApiException(response.statusCode, _detail(json, response));
+  }
+
+  Future<http.Response> _raw(String method, String path, Object? body, Duration timeout) async {
     final request = http.Request(method, Uri.parse('$baseUrl$path'));
     request.headers['Accept'] = 'application/json';
     if (token != null) request.headers['Authorization'] = 'Bearer $token';
@@ -84,10 +101,7 @@ class ApiClient {
       throw OfflineException("Can't reach the Sidequest server at $baseUrl - is the backend running?");
     }
 
-    final text = utf8.decode(response.bodyBytes);
-    final dynamic json = text.isEmpty ? null : _tryDecode(text);
-    if (response.statusCode >= 200 && response.statusCode < 300) return json;
-    throw ApiException(response.statusCode, _detail(json, response));
+    return response;
   }
 
   static dynamic _tryDecode(String text) {

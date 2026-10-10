@@ -379,8 +379,6 @@ def render_quest(record: dict) -> None:
             st.markdown(f"♿ **Accessibility:** {q['accessibility_notes']}")
         if q.get("weather_backup"):
             st.markdown(f"🌦️ **If the weather turns:** {q['weather_backup']}")
-        if q.get("why_it_fits"):
-            st.caption(f"Why this fits you: {q['why_it_fits']}")
         if q.get("tags"):
             st.caption(" · ".join(f"#{t}" for t in q["tags"]))
 

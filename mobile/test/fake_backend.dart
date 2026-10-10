@@ -14,6 +14,8 @@ class FakeBackend {
   final preferences = <String, Map<String, dynamic>>{}; // user id -> body
   final quests = <String, List<Map<String, dynamic>>>{}; // user id -> records (newest first)
   final requests = <String>[]; // "METHOD /path" log
+  final logs = <String, List<Map<String, dynamic>>>{}; // user id -> journal entries (with 'image' bytes as base64)
+  int _nextLog = 1;
   Map<String, dynamic>? lastQuestSettings;
   int _nextQuest = 1;
   int _nextToken = 1;
@@ -76,6 +78,10 @@ class FakeBackend {
 
   http.Response _error(int status, String detail) => _json({'detail': detail}, status);
 
+  /// A journal entry as the API returns it: no image bytes, just has_photo.
+  static Map<String, dynamic> _publicLog(Map<String, dynamic> l) =>
+      {...l, 'has_photo': l['image'] != null}..remove('image');
+
   Future<http.Response> _handle(http.Request request) async {
     if (!online) throw http.ClientException('Connection refused', request.url);
     final path = request.url.path;
@@ -108,6 +114,16 @@ class FakeBackend {
       sessions.remove(auth.substring(7));
       return http.Response('', 204);
     }
+    if (path == '/auth/me' && request.method == 'DELETE') {
+      final b = body as Map<String, dynamic>;
+      if (users[userId]!['password'] != b['password']) return _error(403, 'Wrong password');
+      users.remove(userId);
+      sessions.removeWhere((_, uid) => uid == userId);
+      preferences.remove(userId);
+      quests.remove(userId);
+      logs.remove(userId);
+      return http.Response('', 204);
+    }
     if (path == '/auth/me' && request.method == 'PATCH') {
       final u = users[userId]!;
       final b = body as Map<String, dynamic>;
@@ -121,6 +137,51 @@ class FakeBackend {
     if (segments.length < 3 || segments[0] != 'users') return _error(404, 'Not found');
     if (segments[1] != userId) return _error(403, 'You can only access your own data');
 
+    if (segments[2] == 'stats') {
+      final list = quests[userId] ?? [];
+      return _json({
+        'completed': list.where((q) => q['status'] == 'completed').length,
+        'generated': list.length,
+        'minutes_outside': 0,
+      });
+    }
+    if (segments[2] == 'logs' && segments.length == 5 && segments[4] == 'photo') {
+      final id = int.parse(segments[3]);
+      final matches = (logs[userId] ?? []).where((l) => l['id'] == id && l['image'] != null);
+      if (matches.isEmpty) return _error(404, 'Photo not found');
+      return http.Response.bytes(base64Decode(matches.first['image'] as String), 200,
+          headers: {'content-type': matches.first['mime'] as String});
+    }
+    if (segments[2] == 'logs' && segments.length == 4 && request.method == 'DELETE') {
+      logs[userId]?.removeWhere((l) => l['client_id'] == segments[3]);
+      return http.Response('', 204);
+    }
+    if (segments[2] == 'quests' && segments.length == 5 && segments[4] == 'logs') {
+      final qid = int.parse(segments[3]);
+      if (!(quests[userId] ?? []).any((q) => q['id'] == qid)) return _error(404, 'Quest not found');
+      final mine = logs.putIfAbsent(userId, () => []);
+      if (request.method == 'GET') {
+        return _json([
+          for (final l in mine.where((l) => l['quest_id'] == qid))
+            _publicLog(l),
+        ]);
+      }
+      final b = body as Map<String, dynamic>;
+      final existing = mine.where((l) => l['client_id'] == b['client_id']);
+      if (existing.isNotEmpty) return _json(_publicLog(existing.first), 201);
+      final entry = <String, dynamic>{
+        'id': _nextLog++,
+        'quest_id': qid,
+        'client_id': b['client_id'],
+        'kind': b['kind'],
+        'text': b['text'] ?? '',
+        'mime': b['mime'],
+        'image': b['image_base64'],
+        'created_at': b['created_at'] ?? DateTime.now().toUtc().toIso8601String(),
+      };
+      mine.add(entry);
+      return _json(_publicLog(entry), 201);
+    }
     if (segments[2] == 'preferences') {
       if (request.method == 'PUT') {
         preferences[userId] = body as Map<String, dynamic>;

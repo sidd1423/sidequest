@@ -56,7 +56,6 @@ class QuestCard extends StatelessWidget {
               ),
             if (quest.accessibilityNotes.isNotEmpty) _Note(icon: Icons.accessible, text: quest.accessibilityNotes),
             if (quest.weatherBackup.isNotEmpty) _Note(icon: Icons.umbrella_outlined, text: quest.weatherBackup),
-            if (quest.whyItFits.isNotEmpty) _Note(icon: Icons.lightbulb_outline, text: quest.whyItFits),
           ],
         ),
       ),

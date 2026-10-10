@@ -66,5 +66,9 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Add photos from your quests to your quest log.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Take photos for your quest log.</string>
 </dict>
 </plist>

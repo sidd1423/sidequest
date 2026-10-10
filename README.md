@@ -63,7 +63,7 @@ spent, comment) changes the next quest in four places:
    a disliked quest, is rejected and Gemma is asked again with the reason.
 
 Gemma itself isn't retrained - it's personalised through the prompt every
-time. `why_it_fits` on the quest card says what in the feedback shaped it.
+time.
 The backend log prints the learned taste on each generation.
 
 ### API
@@ -75,11 +75,16 @@ The backend log prints the learned taste on each generation.
 | POST   | `/auth/login` | `{email, password}` -> `{token, user}` (a new session per device) |
 | POST   | `/auth/logout` | Revoke the current token |
 | GET / PATCH | `/auth/me` | The logged-in user / change name or email |
+| DELETE | `/auth/me` | Delete the account and all its data. Body `{password}` |
 | GET    | `/users/{user_id}/preferences` | Fetch saved preferences (404 if none) |
 | PUT    | `/users/{user_id}/preferences` | Create or update preferences |
 | DELETE | `/users/{user_id}/preferences` | Delete preferences |
 | POST   | `/users/{user_id}/quests` | Generate a new sidequest with Gemma. Optional body `{duration_minutes, group_size, difficulty, energy_level, max_travel_km}` overrides the profile for this quest |
 | GET    | `/users/{user_id}/quests` | List the user's quests, newest first |
+| GET    | `/users/{user_id}/stats` | `{completed, generated, minutes_outside}` |
+| GET / POST | `/users/{user_id}/quests/{quest_id}/logs` | Quest log: list / add a note or photo `{client_id, kind: note\|photo, text, image_base64?, mime?}` (same `client_id` again = update) |
+| GET    | `/users/{user_id}/logs/{log_id}/photo` | A photo's bytes |
+| DELETE | `/users/{user_id}/logs/{client_id}` | Delete a note or photo |
 | POST   | `/users/{user_id}/quests/{quest_id}/feedback` | Mark completed/skipped, rate 1-5, comment |
 
 `/users/...` routes need `Authorization: Bearer <token>` (user ids look like

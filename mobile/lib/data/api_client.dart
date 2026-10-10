@@ -19,7 +19,7 @@ class ApiException implements Exception {
 
 /// The backend couldn't be reached (no connection, server down, timeout).
 class OfflineException implements Exception {
-  const OfflineException([this.message = "You're offline - can't reach the Sidequest server."]);
+  const OfflineException([this.message = "Can't reach the Sidequest server."]);
 
   final String message;
 
@@ -30,12 +30,13 @@ class OfflineException implements Exception {
 /// Where the FastAPI backend runs. Override with
 /// `flutter run --dart-define=API_BASE_URL=http://192.168.1.20:8000`.
 /// Defaults: the Android emulator reaches your computer at 10.0.2.2,
-/// everything else (web, Windows, iOS simulator) at localhost.
+/// everything else (web, Windows, iOS simulator) at 127.0.0.1 (not
+/// "localhost", which can resolve to IPv6 ::1 while uvicorn only listens on IPv4).
 String defaultApiBaseUrl() {
   const fromEnv = String.fromEnvironment('API_BASE_URL');
   if (fromEnv.isNotEmpty) return fromEnv;
   if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) return 'http://10.0.2.2:8000';
-  return 'http://localhost:8000';
+  return 'http://127.0.0.1:8000';
 }
 
 /// Thin JSON client for the Sidequest API. Adds the session token, turns
@@ -75,9 +76,12 @@ class ApiClient {
     try {
       response = await http.Response.fromStream(await _http.send(request).timeout(timeout));
     } on TimeoutException {
-      throw const OfflineException('The server took too long to answer. Check your connection and try again.');
-    } on http.ClientException {
-      throw const OfflineException(); // includes SocketException on mobile/desktop
+      debugPrint('Sidequest API: $method $baseUrl$path timed out after ${timeout.inSeconds}s');
+      throw OfflineException('The Sidequest server at $baseUrl took too long to answer.');
+    } on http.ClientException catch (e) {
+      // Includes SocketException on mobile/desktop: no network, or nothing listening at baseUrl.
+      debugPrint('Sidequest API: $method $baseUrl$path failed: $e');
+      throw OfflineException("Can't reach the Sidequest server at $baseUrl - is the backend running?");
     }
 
     final text = utf8.decode(response.bodyBytes);

@@ -39,7 +39,7 @@ class SyncBanner extends StatelessWidget {
         color: colors.secondaryContainer,
         foreground: colors.onSecondaryContainer,
         icon: Icons.cloud_off,
-        text: "You're offline - showing saved data.$pendingText",
+        text: "Can't reach the server (${state.api.baseUrl}) - showing saved data.$pendingText",
         action: TextButton(
           onPressed: state.isSyncing ? null : () => state.sync(),
           child: const Text('Retry'),

@@ -86,7 +86,9 @@ Log in  <──>  Sign up ──▶ Set up your quests   auth screens - no botto
    flutter test         # widget tests against a fake backend (test/fake_backend.dart)
    ```
 
-   The app calls `http://localhost:8000` (Android emulator: `http://10.0.2.2:8000`).
+   The app calls `http://127.0.0.1:8000` (Android emulator: `http://10.0.2.2:8000`).
+   If it says it can't reach the server, the backend isn't running (check
+   http://127.0.0.1:8000/health in a browser).
    On a real phone, use your computer's LAN address:
    `flutter run --dart-define=API_BASE_URL=http://192.168.1.20:8000`.
    Debug Android builds allow plain `http://` (see

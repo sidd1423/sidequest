@@ -11,9 +11,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  http: ^1.2.2                     # talks to the FastAPI backend
-  shared_preferences: ^2.3.2       # offline cache: profile, quest history, unsynced changes
-  flutter_secure_storage: ^9.2.2   # the login token (Keychain / Keystore / DPAPI)
+  http: ^1.5.0                     # talks to the FastAPI backend
+  shared_preferences: ^2.5.3       # offline cache: profile, quest history, unsynced changes
+  flutter_secure_storage: ^10.0.0  # the login token (Keychain / Keystore / DPAPI)
 
 dev_dependencies:
   flutter_test:

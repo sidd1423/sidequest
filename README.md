@@ -74,8 +74,9 @@ went, so the next one is steered by them:
 - Every generated quest is added (and still added to the quest library too).
 - Each user keeps their **10 most recent** quests; older ones are pruned,
   except quests with logged time, which are always kept.
-- On startup, every quest-library entry with `time_logged_minutes > 0` is
-  copied in (`copied_from_library = 1`).
+- Every quest-library entry with `time_logged_minutes > 0` is copied in
+  (`copied_from_library = 1`): all of them on startup, and immediately when
+  feedback logs time on a quest that had already dropped out of the last 10.
 - The last 10 go to Gemma grouped as *loved* (4-5 stars), *disliked*
   (1-2 stars), *rated OK*, *skipped* and *not done yet*. Gemma must not repeat
   any of them, and a new quest that is too close to a disliked one (same

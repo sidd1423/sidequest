@@ -163,7 +163,7 @@ def give_feedback(feedback: FeedbackIn, quest_id: int, user_id: str = UserId) ->
         library.record_feedback(quest_id, feedback)
     except Exception as exc:
         log.warning("Couldn't store feedback for quest %s in the library: %s", quest_id, exc)
-    try:
+    try:  # after the library, so a pruned quest with logged time can be copied back from it
         history.record_feedback(quest_id, feedback)
     except Exception as exc:
         log.warning("Couldn't store feedback for quest %s in the user history: %s", quest_id, exc)

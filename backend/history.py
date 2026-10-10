@@ -6,8 +6,9 @@ lean toward what they loved and steer clear of what they disliked or skipped.
 * Every generated quest is added here (as well as to the quest library).
 * Each user keeps their 10 most recent quests; older ones are pruned, except
   quests with logged time (time_logged_minutes > 0), which are always kept.
-* Every quest-library row with time_logged_minutes > 0 is copied in (backfill
-  on startup), so completed quests from before this database existed count.
+* Every quest-library row with time_logged_minutes > 0 is copied in: all of
+  them on startup (backfill), and immediately when feedback logs time on a
+  quest that had already been pruned from the user's last 10.
 """
 
 from __future__ import annotations
@@ -88,17 +89,22 @@ def init_history(path: Path | None = None, library_db: Path | None = None) -> in
         conn.close()
 
 
-def copy_logged_from_library(conn: sqlite3.Connection, library_db: Path) -> int:
-    """Copy (or refresh) every quest-library row with time_logged_minutes > 0."""
+def copy_logged_from_library(conn: sqlite3.Connection, library_db: Path,
+                             app_quest_id: int | None = None) -> int:
+    """Copy (or refresh) quest-library rows with time_logged_minutes > 0 -
+    all of them, or just the one for `app_quest_id`."""
     lib = sqlite3.connect(f"file:{library_db}?mode=ro", uri=True)
     lib.row_factory = sqlite3.Row
     try:
         cols = {r[1] for r in lib.execute("PRAGMA table_info(quests)")}
         if "time_logged_minutes" not in cols:
             return 0
-        rows = lib.execute(
-            """SELECT * FROM quests WHERE time_logged_minutes > 0 AND user_id IS NOT NULL"""
-        ).fetchall()
+        sql = "SELECT * FROM quests WHERE time_logged_minutes > 0 AND user_id IS NOT NULL"
+        params: tuple = ()
+        if app_quest_id is not None:
+            sql += " AND app_quest_id = ?"
+            params = (app_quest_id,)
+        rows = lib.execute(sql, params).fetchall()
     finally:
         lib.close()
 
@@ -168,7 +174,12 @@ def add_quest(app_quest_id: int, user_id: str, quest: Quest, model: str = "",
         conn.close()
 
 
-def record_feedback(app_quest_id: int, feedback: FeedbackIn, path: Path | None = None) -> bool:
+def record_feedback(app_quest_id: int, feedback: FeedbackIn, path: Path | None = None,
+                    library_db: Path | None = None) -> bool:
+    """Store feedback on the user's history row. If the quest is no longer in
+    the history (pruned from the last 10) and the feedback logs time, copy it
+    back in from the quest library right away - every entry with logged time
+    belongs in the history. Call this after library.record_feedback()."""
     conn = _connect(Path(path or history_path()))
     try:
         cur = conn.execute(
@@ -183,7 +194,21 @@ def record_feedback(app_quest_id: int, feedback: FeedbackIn, path: Path | None =
              feedback.time_logged_minutes or 0, _now(), app_quest_id),
         )
         conn.commit()
-        return cur.rowcount > 0
+        if cur.rowcount > 0:
+            return True
+        if not feedback.time_logged_minutes:
+            return False
+        if library_db is None:
+            from .library import library_path
+
+            library_db = library_path()
+        if not Path(library_db).exists():
+            return False
+        copied = copy_logged_from_library(conn, Path(library_db), app_quest_id=app_quest_id)
+        if copied:
+            log.info("Quest %s was outside the user's last 10 - copied back in because it now has logged time",
+                     app_quest_id)
+        return copied > 0
     finally:
         conn.close()
 

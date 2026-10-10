@@ -250,3 +250,59 @@ def test_api_rates_unfinished_quest_everywhere():
     assert conn.execute("select rating, time_logged_minutes from quests where app_quest_id = ?",
                         (qid,)).fetchone() == (2, 5)
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Pruned quest gets logged time later -> copied back immediately
+# ---------------------------------------------------------------------------
+
+def test_pruned_quest_with_logged_time_is_copied_back_immediately(tmp_path, hpath):
+    from backend import library
+
+    lib = tmp_path / "lib.db"
+    library.init_library(lib)
+    for i in range(1, 13):  # quest 1 and 2 fall out of the last 10
+        library.add_generated(i, "u1", q(f"Quest number {i}"), path=lib)
+        history.add_quest(i, "u1", q(f"Quest number {i}"), path=hpath)
+    assert "Quest number 1" not in {r["title"] for r in rows(hpath)}
+
+    fb = FeedbackIn(completed=True, rating=4, comment="did it later", time_logged_minutes=11)
+    library.record_feedback(1, fb, path=lib)
+    assert history.record_feedback(1, fb, path=hpath, library_db=lib) is True
+    [r] = [r for r in rows(hpath) if r["app_quest_id"] == 1]
+    assert (r["title"], r["rating"], r["time_logged_minutes"], r["copied_from_library"]) == \
+        ("Quest number 1", 4, 11, 1)
+
+    # no logged time -> nothing to copy
+    zero = FeedbackIn(completed=False)
+    library.record_feedback(2, zero, path=lib)
+    assert history.record_feedback(2, zero, path=hpath, library_db=lib) is False
+    assert 2 not in {r["app_quest_id"] for r in rows(hpath)}
+
+    # the copied row survives later pruning
+    history.add_quest(13, "u1", q("Quest number 13"), path=hpath)
+    assert 1 in {r["app_quest_id"] for r in rows(hpath)}
+
+
+def test_api_copies_pruned_quest_with_logged_time(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from backend.main import app, get_llm, get_retriever
+
+    llm = FakeLLM(*[json.dumps({**QUEST, "title": f"API Quest {i}", "tags": ["outdoors", f"t{i}"]})
+                    for i in range(12)])
+    app.dependency_overrides[get_llm] = lambda: llm
+    app.dependency_overrides[get_retriever] = lambda: None
+    try:
+        with TestClient(app) as c:
+            c.put("/users/gowtham/preferences", json=VALID)
+            ids = [c.post("/users/gowtham/quests").json()["id"] for _ in range(12)]
+            assert ids[0] not in {r["app_quest_id"] for r in rows(os.environ["HISTORY_PATH"])}
+            r = c.post(f"/users/gowtham/quests/{ids[0]}/feedback",
+                       json={"completed": True, "rating": 5, "time_logged_minutes": 20})
+            assert r.status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+
+    [h] = [r for r in rows(os.environ["HISTORY_PATH"]) if r["app_quest_id"] == ids[0]]
+    assert (h["title"], h["rating"], h["time_logged_minutes"]) == ("API Quest 0", 5, 20)

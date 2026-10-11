@@ -31,7 +31,7 @@ from typing import Sequence
 
 from .embeddings import Embedder, EmbeddingError, LocalEmbedder
 from .retrieval import RetrievalError, build_query_text, embedding_text, interest_terms
-from .schemas import FeedbackEntry, FeedbackIn, Interest, PreferencesIn, Quest, QuestExample
+from .schemas import FeedbackEntry, FeedbackIn, Interest, PreferencesIn, Quest, QuestContext, QuestExample
 
 log = logging.getLogger("sidequest.library")
 
@@ -396,9 +396,10 @@ class LocalLibraryRetriever:
         ]
 
     def retrieve(
-        self, profile: PreferencesIn, feedback: Sequence[FeedbackEntry] | None = None, k: int = 3
+        self, profile: PreferencesIn, feedback: Sequence[FeedbackEntry] | None = None, k: int = 3,
+        context: QuestContext | None = None,
     ) -> list[QuestExample]:
-        results = self.search(build_query_text(profile, feedback), k=k,
+        results = self.search(build_query_text(profile, feedback, context), k=k,
                               max_minutes=profile.availability.duration_minutes,
                               interests=interest_terms(profile))
         log.info("Local library retrieval: %d examples (%s)", len(results),

@@ -61,7 +61,7 @@ PROFILE = PreferencesIn.model_validate(VALID)  # nature + photography, 25 min, w
 
 def test_query_text_describes_user():
     q = build_query_text(PROFILE)
-    for word in ("nature", "photography", "easy", "waterfront", "step free", "outdoor", "right now"):
+    for word in ("nature", "photography", "easy", "step free", "outdoor", "right now"):
         assert word in q
 
 

@@ -21,6 +21,7 @@ from .schemas import (
     Quest,
     QuestRecord,
     QuestExample,
+    QuestContext,
     QuestStatus,
 )
 
@@ -41,7 +42,8 @@ CREATE TABLE IF NOT EXISTS quests (
     model        TEXT NOT NULL DEFAULT '',
     created_at   TEXT NOT NULL,
     feedback_at  TEXT,
-    completed_at TEXT
+    completed_at TEXT,
+    context      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_quests_user ON quests (user_id, created_at);
 """
@@ -74,6 +76,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "completed_at" not in cols:
         # When the quest was completed (for streaks). Older rows fall back to feedback_at.
         conn.execute("ALTER TABLE quests ADD COLUMN completed_at TEXT")
+    if "context" not in cols:
+        # Weather/place/nearby spots when the quest was generated (QuestContext JSON).
+        conn.execute("ALTER TABLE quests ADD COLUMN context TEXT")
 
 
 def _row_to_model(row: sqlite3.Row) -> PreferencesOut:
@@ -124,7 +129,7 @@ def delete_user_data(user_id: str) -> None:
     with connect() as conn:
         conn.execute("DELETE FROM user_preferences WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM quests WHERE user_id = ?", (user_id,))
-        for table in ("quest_logs", "streak_freezes"):
+        for table in ("quest_logs", "streak_freezes", "quest_routes"):
             if conn.execute("SELECT 1 FROM sqlite_master WHERE name = ?", (table,)).fetchone():
                 conn.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
 
@@ -183,6 +188,7 @@ def _now() -> str:
 
 
 def _row_to_quest(row: sqlite3.Row) -> QuestRecord:
+    context = row["context"] if "context" in row.keys() else None
     return QuestRecord(
         id=row["id"],
         user_id=row["user_id"],
@@ -191,14 +197,17 @@ def _row_to_quest(row: sqlite3.Row) -> QuestRecord:
         feedback=FeedbackIn.model_validate_json(row["feedback"]) if row["feedback"] else None,
         created_at=row["created_at"],
         model=row["model"],
+        context=QuestContext.model_validate_json(context) if context else None,
     )
 
 
-def add_quest(user_id: str, quest: Quest, model: str = "") -> QuestRecord:
+def add_quest(user_id: str, quest: Quest, model: str = "", context: QuestContext | None = None) -> QuestRecord:
     with connect() as conn:
+        _migrate(conn)
         cur = conn.execute(
-            "INSERT INTO quests (user_id, data, model, created_at) VALUES (?, ?, ?, ?)",
-            (user_id, quest.model_dump_json(), model, _now()),
+            "INSERT INTO quests (user_id, data, model, created_at, context) VALUES (?, ?, ?, ?, ?)",
+            (user_id, quest.model_dump_json(), model, _now(),
+             context.model_dump_json() if context is not None and not context.is_empty else None),
         )
         row = conn.execute("SELECT * FROM quests WHERE id = ?", (cur.lastrowid,)).fetchone()
     return _row_to_quest(row)

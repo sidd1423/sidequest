@@ -3,10 +3,10 @@ import 'package:flutter/material.dart';
 import '../models/preference_options.dart';
 import '../models/profile_preferences.dart';
 
-/// The "set once" quest preferences: interests, accessibility, surroundings,
-/// crowds and weather. Used by the sign-up preferences step and by
-/// Edit account. Minutes, difficulty, energy, distance and who's with you are
-/// chosen per quest instead.
+/// The "set once" quest preferences: interests, accessibility and crowds.
+/// Used by the sign-up preferences step and by Edit account. Minutes,
+/// difficulty, energy, distance and who's with you are chosen per quest;
+/// weather and what's around you come from your location for every quest.
 ///
 /// Edits [preferences] in place and calls [onChanged] after every change.
 class ProfilePreferencesForm extends StatefulWidget {
@@ -82,7 +82,6 @@ class _ProfilePreferencesFormState extends State<ProfilePreferencesForm> {
 
   @override
   Widget build(BuildContext context) {
-    final t = _p.temperatureC;
     return Column(
       key: const Key('profile_preferences_form'),
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -110,24 +109,17 @@ class _ProfilePreferencesFormState extends State<ProfilePreferencesForm> {
           onChanged: (v) => _update(() => _p.accessibilityNotes = v),
         ),
 
-        _heading(context, 'Where you usually are'),
-        _multiChips('surroundings', surroundingsOptions, _p.surroundings),
-
         _heading(context, 'Crowds'),
         _singleChips('crowd', crowdOptions, _p.crowd, (v) => _p.crowd = v),
 
-        _heading(context, 'Weather', 'Conditions to avoid'),
-        _multiChips('weather', weatherAvoidOptions, _p.weatherAvoid),
-        const SizedBox(height: 12),
-        Text('Comfortable temperature: ${t.start.round()}°C to ${t.end.round()}°C'),
-        RangeSlider(
-          key: const Key('temperature_range'),
-          values: t,
-          min: -20,
-          max: 40,
-          divisions: 60,
-          labels: RangeLabels('${t.start.round()}°C', '${t.end.round()}°C'),
-          onChanged: (v) => _update(() => _p.temperatureC = v),
+        const SizedBox(height: 24),
+        const ListTile(
+          key: Key('live_conditions_note'),
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(Icons.my_location),
+          title: Text('Weather and places nearby are automatic'),
+          subtitle: Text('Each quest uses your location to check the weather right now and find real '
+              'parks, paths and spots near you. You can type a place instead if location is off.'),
         ),
       ],
     );

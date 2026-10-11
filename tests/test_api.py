@@ -19,12 +19,10 @@ VALID = {
     "energy_level": 2,
     "accessibility": {"needs": ["step_free"], "notes": "bring a stool"},
     "environment": {
-        "surroundings": ["waterfront"],
         "crowd_tolerance": "quiet",
         "group_size": "pair",
         "max_travel_km": 1.5,
     },
-    "weather": {"avoid": ["rain", "extreme_cold"], "min_temp_c": 8, "max_temp_c": 28},
 }
 
 
@@ -44,8 +42,18 @@ def test_save_and_load_roundtrip(client):
     assert body["custom_interests"] == ["birdwatching"]  # cleaned + deduped
 
     loaded = client.get("/users/gowtham/preferences").json()
-    assert loaded["weather"]["avoid"] == ["rain", "extreme_cold"]
+    assert "weather" not in loaded and "surroundings" not in loaded["environment"]
     assert loaded["environment"]["max_travel_km"] == 1.5
+
+
+def test_old_weather_and_surroundings_fields_are_ignored(client):
+    """Older apps / queued offline edits still send them - accepted, then dropped
+    (weather and what's around you are looked up live now)."""
+    old = {**VALID, "environment": {**VALID["environment"], "surroundings": ["waterfront"]},
+           "weather": {"avoid": ["rain"], "min_temp_c": 8, "max_temp_c": 28}}
+    r = client.put("/users/gowtham/preferences", json=old)
+    assert r.status_code == 200, r.text
+    assert "weather" not in r.json() and "surroundings" not in r.json()["environment"]
 
 
 def test_update_keeps_created_at(client):
@@ -62,7 +70,7 @@ def test_update_keeps_created_at(client):
         {"interests": [], "custom_interests": []},
         {"energy_level": 9},
         {"difficulty": "impossible"},
-        {"weather": {"avoid": [], "min_temp_c": 30, "max_temp_c": 10}},
+        {"environment": {"crowd_tolerance": "rowdy"}},
         {"availability": {"duration_minutes": 45}},
         {"availability": {"duration_minutes": 2}},
         {"environment": {"max_travel_km": 20}},

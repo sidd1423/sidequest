@@ -4,6 +4,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:sidequest/models/location.dart';
 
 class FakeBackend {
   /// false = every request fails like a dropped connection.
@@ -17,6 +18,25 @@ class FakeBackend {
   final logs = <String, List<Map<String, dynamic>>>{}; // user id -> journal entries (with 'image' bytes as base64)
   int _nextLog = 1;
   Map<String, dynamic>? lastQuestSettings;
+
+  /// What GET /conditions (and quests made with a location) report - like backend/local_context.py.
+  Map<String, dynamic> conditions = {
+    'place': 'Riverdale, Toronto',
+    'lat': 43.668,
+    'lon': -79.353,
+    'weather': {'temp_c': 12.3, 'feels_like_c': 9.1, 'condition': 'light rain', 'rain_chance_pct': 80,
+        'wind_kmh': 18.0, 'is_day': true, 'sunset': '18:52'},
+    'nearby': [
+      {'name': 'Riverdale Park', 'kind': 'park', 'distance_m': 350, 'direction': 'NE', 'lat': 43.6705, 'lon': -79.3555},
+      {'name': 'Don River', 'kind': 'river', 'distance_m': 600, 'direction': 'W', 'lat': 43.67, 'lon': -79.359},
+    ],
+  };
+
+  /// Recorded routes: quest id -> {user, points}.
+  final routes = <int, Map<String, dynamic>>{};
+
+  /// Body of the last POST .../parties/{id}/start.
+  Map<String, dynamic>? lastStartBody;
 
   /// Streak to return instead of the simple default (user id -> GET /streak body).
   /// Completing a quest bumps it like the real server would.
@@ -203,6 +223,21 @@ class FakeBackend {
       }
       return _json(_streak(userId));
     }
+    if (segments[2] == 'conditions') return _json(conditions);
+    if (segments[2] == 'quests' && segments.length == 5 && segments[4] == 'route') {
+      final qid = int.parse(segments[3]);
+      if (!(quests[userId] ?? []).any((q) => q['id'] == qid)) return _error(404, 'Quest not found');
+      if (request.method == 'DELETE') {
+        routes.remove(qid);
+        return http.Response('', 204);
+      }
+      if (request.method == 'GET') {
+        final r = routes[qid];
+        return r == null ? _error(404, 'No route recorded for this quest') : _json(_route(qid));
+      }
+      routes[qid] = {'user': userId, 'points': (body as Map<String, dynamic>)['points']};
+      return _json(_route(qid));
+    }
     if (segments[2] == 'friends') return _friendsRoute(request, segments, userId, body);
     if (segments[2] == 'parties') return _partiesRoute(request, segments, userId, body);
     if (segments[2] == 'stats') {
@@ -259,12 +294,14 @@ class FakeBackend {
       return p == null ? _error(404, 'No preferences saved for this user') : _json({...p, 'user_id': userId});
     }
     if (segments[2] == 'quests' && segments.length == 3) {
-      if (request.method == 'GET') return _json([for (final q in quests[userId] ?? []) _withParty(q)]);
+      if (request.method == 'GET') return _json([for (final q in quests[userId] ?? []) _withRoute(_withParty(q))]);
       if (preferences[userId] == null) return _error(404, 'Save preferences before generating a quest');
       final s = (body as Map<String, dynamic>?) ?? const {};
       lastQuestSettings = s;
       final n = _nextQuest;
       final record = addQuest(userId, title: 'Quest #$n');
+      if (s['location'] != null) record['context'] = conditions;
+      if (s['location'] == null && s['place'] != null) record['context'] = {...conditions, 'place': s['place']};
       record['quest'] = _quest(
         'Quest #$n',
         (s['duration_minutes'] as int?) ?? 15,
@@ -298,6 +335,32 @@ class FakeBackend {
 }
 
 extension on FakeBackend {
+  List<GeoPoint> _points(int questId) => [
+        for (final p in routes[questId]!['points'] as List<dynamic>) GeoPoint.fromJson(p as Map<String, dynamic>),
+      ];
+
+  Map<String, dynamic> _route(int questId) {
+    final points = _points(questId);
+    final summary = RouteSummary.measure(points);
+    return {
+      'quest_id': questId,
+      'points': routes[questId]!['points'],
+      'distance_m': summary.distanceM,
+      'duration_seconds': summary.durationSeconds,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    };
+  }
+
+  Map<String, dynamic> _withRoute(Map<String, dynamic> q) {
+    final id = q['id'] as int;
+    if (!routes.containsKey(id)) return q;
+    final r = _route(id);
+    return {
+      ...q,
+      'route': {'distance_m': r['distance_m'], 'duration_seconds': r['duration_seconds'], 'points': _points(id).length},
+    };
+  }
+
   Map<String, dynamic> _withParty(Map<String, dynamic> q) {
     for (final p in parties) {
       if ((p['quests'] as Map<String, dynamic>).containsValue(q['id'])) {
@@ -390,6 +453,7 @@ extension on FakeBackend {
       if (p['host'] != userId) return _error(403, 'Only the host can start the group quest');
       final joined = [for (final e in members.entries) if (e.value == 'joined') e.key];
       if (joined.length < 2) return _error(409, 'Wait until at least one friend has joined');
+      lastStartBody = body as Map<String, dynamic>?;
       p['status'] = 'started';
       p['title'] = 'Group Quest #${p['id']}';
       p['size'] = joined.length;
@@ -530,6 +594,5 @@ const savedPrefs = <String, dynamic>{
   'energy_level': 2,
   'availability': {'duration_minutes': 15},
   'accessibility': {'needs': <String>[], 'notes': ''},
-  'environment': {'surroundings': <String>[], 'crowd_tolerance': 'quiet', 'group_size': 'solo', 'max_travel_km': 1.0},
-  'weather': {'avoid': <String>[], 'min_temp_c': 5, 'max_temp_c': 30},
+  'environment': {'crowd_tolerance': 'quiet', 'group_size': 'solo', 'max_travel_km': 1.0},
 };

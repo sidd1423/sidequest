@@ -1,4 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Talk to the backend and load map tiles (release builds need this too). -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Weather/places for each quest + recording the route while the app is open. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <application
         android:label="sidequest"
         android:name="${applicationName}"

@@ -11,3 +11,4 @@ def isolated_storage(tmp_path, monkeypatch):
     # Older API tests call /users/{id}/... without logging in; test_auth.py turns this back on.
     monkeypatch.setenv("AUTH_REQUIRED", "false")
     monkeypatch.setenv("PASSWORD_HASH_ITERATIONS", "1000")  # fast hashing in tests
+    monkeypatch.setenv("LOCAL_CONTEXT", "off")  # never call weather/map services from tests

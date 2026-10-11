@@ -78,7 +78,8 @@ def test_hard_constraints_in_prompt():
     prompt = build_prompt(PROFILE)
     assert "between 5 and 25 minutes" in prompt
     assert "within 1.5 km" in prompt
-    assert "between 8 and 28" in prompt
+    assert "don't know the weather" in prompt.lower()
+    assert "don't name specific places" in prompt
     assert "OUTSIDE" in prompt and "RIGHT NOW" in prompt
     assert "indoor | outdoor" not in prompt and "time of day" not in prompt.lower()
 

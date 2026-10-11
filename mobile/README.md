@@ -22,13 +22,24 @@ first if changes haven't synced). Logic: `lib/data/app_state.dart`.
 **Which preferences live where**
 
 - *Set once* (Sign up step 2, editable in Edit account): interests, accessibility,
-  surroundings, crowds, weather to avoid + temperature range.
+  crowds.
+- *Automatic* (no questions): your location, the weather there right now and
+  real places nearby. The **Right now** card on the Quest tab shows them; the
+  location is sent with Generate (and with Start for group quests). If location
+  is off you can type where you are instead.
 - *Picked before each quest* (Quest tab): minutes (5-30), who's with you,
   difficulty, energy, distance (0-5 km) - sent with the Generate request.
 - **Generate** asks the backend, which asks Gemma with your profile, these
   settings, 3 example quests and your feedback (see "Feedback loop" in the
   main README). Ratings you send shape the next quest.
 - A counter at the top of the Quest tab shows how many quests you've completed.
+- **Your route**: under the quest card, "Start tracking my route" records your
+  path with GPS (keep the app open) and draws it live on an OpenStreetMap map.
+  Stopping, or rating the quest, uploads it (offline: queued in the outbox).
+  The quest's page in History shows the map and distance; you can delete it.
+  Uses `geolocator` + `flutter_map` (no API keys). Permissions: Android
+  `ACCESS_FINE_LOCATION`, iOS `NSLocationWhenInUseUsageDescription`; on Windows
+  turn on Settings > Privacy > Location.
 - Under the quest card, the **Quest log** takes notes and photos (camera on
   phones, file picker on desktop/web). They save offline and upload later;
   you can add more from the quest's page in History.

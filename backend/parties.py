@@ -20,7 +20,7 @@ from fastapi import HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import auth, db
-from .schemas import PartyMemberTag, PartyTag, Quest, QuestRecord, QuestSettings
+from .schemas import GeoPoint, PartyMemberTag, PartyTag, Quest, QuestRecord, QuestSettings
 
 MAX_INVITES = 7  # host + 7 friends
 SHOW_STARTED_FOR = timedelta(hours=24)  # started parties stay in GET /parties this long
@@ -63,6 +63,15 @@ class PartyIn(BaseModel):
 
     friend_ids: list[str] = Field(..., min_length=1, max_length=MAX_INVITES)
     settings: QuestSettings | None = None
+
+
+class StartIn(BaseModel):
+    """Where the group is when the host starts the quest (weather + nearby spots)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    location: GeoPoint | None = None
+    place: str | None = Field(None, max_length=120)
 
 
 class PartyMember(BaseModel):
@@ -162,7 +171,9 @@ def create(host_id: str, data: PartyIn) -> PartyOut:
                                     "You can only invite people who are your friends")
         cur = conn.execute(
             "INSERT INTO parties (host_id, settings, created_at) VALUES (?, ?, ?)",
-            (host_id, data.settings.model_dump_json() if data.settings else None, _now()),
+            # Never store/show the host's position to invitees - it's sent again on start.
+            (host_id, data.settings.model_copy(update={"location": None, "place": None}).model_dump_json()
+             if data.settings else None, _now()),
         )
         pid = cur.lastrowid
         conn.execute("INSERT INTO party_members (party_id, user_id, status, responded_at) VALUES (?, ?, 'joined', ?)",

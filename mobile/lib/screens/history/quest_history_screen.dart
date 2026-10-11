@@ -47,6 +47,7 @@ class QuestHistoryScreen extends StatelessWidget {
   static String _subtitle(QuestRecord q) {
     final parts = <String>['${q.quest.minutes} min', statusLabel(q.status)];
     if (q.rating != null) parts.add('★' * q.rating!);
+    if (q.route != null && q.route!.distanceM > 0) parts.add('🗺 ${q.route!.label.split(' · ').first}');
     return parts.join(' · ');
   }
 }

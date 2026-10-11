@@ -13,7 +13,8 @@ import re
 from typing import Protocol, Sequence
 
 from .embeddings import Embedder, EmbeddingError, GeminiEmbedder
-from .schemas import FeedbackEntry, PreferencesIn, QuestExample
+from .local_context import describe_for_search
+from .schemas import FeedbackEntry, PreferencesIn, QuestContext, QuestExample
 
 log = logging.getLogger("sidequest.retrieval")
 
@@ -28,7 +29,8 @@ class Retriever(Protocol):
     """Anything that can return the top-k example quests for a user."""
 
     def retrieve(
-        self, profile: PreferencesIn, feedback: Sequence[FeedbackEntry] | None = None, k: int = 3
+        self, profile: PreferencesIn, feedback: Sequence[FeedbackEntry] | None = None, k: int = 3,
+        context: QuestContext | None = None,
     ) -> list[QuestExample]: ...
 
 
@@ -56,7 +58,9 @@ def is_configured() -> bool:
     return bool(tiger_url())
 
 
-def build_query_text(profile: PreferencesIn, feedback: Sequence[FeedbackEntry] | None = None) -> str:
+def build_query_text(
+    profile: PreferencesIn, feedback: Sequence[FeedbackEntry] | None = None, context: QuestContext | None = None
+) -> str:
     """Describe what this user wants, in words, for the embedding model.
 
     Interests lead (and are repeated) because they matter most for relevance;
@@ -69,8 +73,9 @@ def build_query_text(profile: PreferencesIn, feedback: Sequence[FeedbackEntry] |
         f"A quick outdoor activity about {' and '.join(interests)}, right now.",
         f"Difficulty {profile.difficulty.value}, energy {profile.energy_level} of 5.",
     ]
-    if env.surroundings:
-        parts.append(f"Outside in a {', '.join(s.value for s in env.surroundings)} area.")
+    where = describe_for_search(context)
+    if where:  # live weather + kinds of places nearby
+        parts.append(where)
     if env.group_size.value != "solo":
         parts.append(f"With {env.group_size.value.replace('_', ' ')}, social.")
     if env.crowd_tolerance.value == "quiet":
@@ -138,9 +143,10 @@ class TigerRetriever:
         ]
 
     def retrieve(
-        self, profile: PreferencesIn, feedback: Sequence[FeedbackEntry] | None = None, k: int = 3
+        self, profile: PreferencesIn, feedback: Sequence[FeedbackEntry] | None = None, k: int = 3,
+        context: QuestContext | None = None,
     ) -> list[QuestExample]:
-        query = build_query_text(profile, feedback)
+        query = build_query_text(profile, feedback, context)
         results = self.search(query, k=k, max_minutes=profile.availability.duration_minutes)
         log.info("Tiger retrieval: %d examples (%s)", len(results),
                  ", ".join(f"{r.category}:{r.similarity}" for r in results))

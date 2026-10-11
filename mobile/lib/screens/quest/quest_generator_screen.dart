@@ -5,7 +5,9 @@ import '../../data/app_scope.dart';
 import '../../models/generated_quest.dart';
 import '../../models/preference_options.dart';
 import '../../widgets/quest_journal.dart';
+import '../../widgets/route_tracker.dart';
 import '../../widgets/streak_widgets.dart';
+import '../../widgets/where_you_are_card.dart';
 import '../auth/auth_scaffold.dart' show AuthError;
 import '../streak/streak_celebration_screen.dart';
 import 'quest_card.dart';
@@ -22,9 +24,11 @@ import 'quest_feedback_form.dart';
 ///    A completed quest leaves this screen (it's in History) and the
 ///    "quests completed" counter at the top goes up.
 ///
-/// Interests, accessibility, surroundings and weather come from the profile
-/// (set at sign-up / Edit account). Generating needs a connection (Gemma runs
-/// on the server); rating works offline and syncs later.
+/// Interests and accessibility come from the profile (set at sign-up / Edit
+/// account). Where you are, the weather and real places nearby come from
+/// your location ("Right now" card); while doing the quest you can record
+/// your route on a map. Generating needs a connection (Gemma runs on the
+/// server); rating and route tracking work offline and sync later.
 class QuestGeneratorScreen extends StatefulWidget {
   const QuestGeneratorScreen({super.key});
 
@@ -42,6 +46,20 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
   bool _generating = false;
   String? _error;
   final _cardKey = GlobalKey();
+  final _place = TextEditingController();
+
+  @override
+  void dispose() {
+    _place.dispose();
+    super.dispose();
+  }
+
+  /// A typed place counts only while we don't have the device's location.
+  String get _typedPlace {
+    final state = AppScope.read(context);
+    final located = state.here != null && state.locationProblem == null;
+    return located ? '' : _place.text.trim();
+  }
 
   QuestSettings _settings() => QuestSettings(
         minutes: _minutes,
@@ -57,7 +75,7 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
       _error = null;
     });
     try {
-      await AppScope.read(context).generateQuest(_settings());
+      await AppScope.read(context).generateQuest(_settings().withWhere(place: _typedPlace));
     } on OfflineException catch (e) {
       if (mounted) setState(() => _error = '${e.message} New quests need a connection - your history still works offline.');
     } on ApiException catch (e) {
@@ -192,6 +210,8 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
           ),
 
           const SizedBox(height: 16),
+          WhereYouAreCard(placeController: _place, distanceKm: _distanceKm),
+          const SizedBox(height: 16),
           FilledButton.icon(
             key: const Key('generate_button'),
             onPressed: _generating ? null : _generate,
@@ -209,12 +229,19 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
             AuthError(_error!, key: const Key('generate_error')),
           ],
           const SizedBox(height: 20),
-          PartySection(settings: _settings),
+          PartySection(settings: _settings, place: () => _typedPlace),
 
           // --- Result: only after Generate ------------------------------
           if (record != null && quest != null) ...[
             const SizedBox(height: 24),
-            QuestCard(key: _cardKey, quest: quest, party: record.party),
+            QuestCard(key: _cardKey, quest: quest, party: record.party, conditions: record.conditions),
+            const SizedBox(height: 16),
+            RouteTracker(
+              key: ValueKey('route_${record.id}'),
+              questId: record.id,
+              canTrack: true,
+              places: record.conditions?.nearby ?? const [],
+            ),
             const SizedBox(height: 16),
             QuestJournal(key: ValueKey('journal_${record.id}'), questId: record.id),
             const SizedBox(height: 16),

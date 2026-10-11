@@ -70,5 +70,7 @@
 	<string>Add photos from your quests to your quest log.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Take photos for your quest log.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Fit each quest to the weather and real places near you, and draw the route you walked on a map.</string>
 </dict>
 </plist>

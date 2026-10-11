@@ -22,8 +22,6 @@ from backend.schemas import (
     GroupSize,
     Interest,
     PreferencesIn,
-    Surroundings,
-    WeatherCondition,
 )
 from frontend import api_client
 from frontend.api_client import BackendError
@@ -94,10 +92,9 @@ def current_defaults() -> dict:
         "availability": {"duration_minutes": 15},
         "accessibility": {"needs": [], "notes": ""},
         "environment": {
-            "surroundings": [], "crowd_tolerance": "moderate",
+            "crowd_tolerance": "moderate",
             "group_size": "solo", "max_travel_km": 1.0,
         },
-        "weather": {"avoid": [], "min_temp_c": 5, "max_temp_c": 30},
         "difficulty": "moderate",
         "energy_level": 3,
     }
@@ -250,17 +247,10 @@ with st.form("preferences"):
         key=k("access_notes"),
     )
 
-    # --- Surroundings ----------------------------------------------------
-    st.subheader("Where you are")
+    # --- Getting around (weather + what's nearby are looked up live) ------
+    st.subheader("Getting around")
+    st.caption("Weather and what's around you are looked up live for each quest from where you are.")
     env = d["environment"]
-    surroundings = st.pills(
-        "What's around you?",
-        options=list(Surroundings),
-        selection_mode="multi",
-        default=[Surroundings(s) for s in env["surroundings"]],
-        format_func=label,
-        key=k("surroundings"),
-    )
     travel = st.slider(
         "How far are you happy to go from where you are? (km)",
         min_value=0.0, max_value=MAX_TRAVEL_KM, step=0.5,
@@ -287,23 +277,6 @@ with st.form("preferences"):
         )
 
 
-    # --- Weather ---------------------------------------------------------
-    st.subheader("Weather constraints")
-    w = d["weather"]
-    avoid = st.pills(
-        "Avoid activities in…",
-        options=list(WeatherCondition),
-        selection_mode="multi",
-        default=[WeatherCondition(c) for c in w["avoid"]],
-        format_func=label,
-        key=k("avoid"),
-    )
-    temp_range = st.slider(
-        "Comfortable temperature range (°C)",
-        min_value=-40, max_value=50,
-        value=(w["min_temp_c"], w["max_temp_c"]),
-        key=k("temp"),
-    )
 
     submitted = st.form_submit_button(
         "Save preferences", type="primary", use_container_width=True,
@@ -327,12 +300,10 @@ def save_form() -> None:
             energy_level=energy,
             accessibility={"needs": access_needs, "notes": access_notes.strip()},
             environment={
-                "surroundings": surroundings or [],
                 "crowd_tolerance": crowd,
                 "group_size": group,
                 "max_travel_km": float(travel),
             },
-            weather={"avoid": avoid or [], "min_temp_c": temp_range[0], "max_temp_c": temp_range[1]},
         )
     except ValidationError as e:
         for err in e.errors():
@@ -362,10 +333,26 @@ if submitted:
 STARS = {1: "★☆☆☆☆", 2: "★★☆☆☆", 3: "★★★☆☆", 4: "★★★★☆", 5: "★★★★★"}
 
 
+def conditions_line(ctx: dict | None) -> str:
+    """'📍 Riverdale, Toronto · 12°C, light rain' - the conditions the quest was made for."""
+    if not ctx:
+        return ""
+    bits = []
+    if ctx.get("place"):
+        bits.append(f"📍 {ctx['place']}")
+    w = ctx.get("weather")
+    if w:
+        bits.append(f"{w['temp_c']:.0f}°C" + (f", {w['condition']}" if w.get("condition") else ""))
+    return " · ".join(bits)
+
+
 def render_quest(record: dict) -> None:
     q = record["quest"]
     with st.container(border=True):
         st.subheader(q["title"])
+        where = conditions_line(record.get("context"))
+        if where:
+            st.caption(where)
         st.write(q["summary"])
         c1, c2, c3 = st.columns(3)
         c1.metric("Time", f"{q['estimated_minutes']} min")
@@ -453,10 +440,16 @@ else:
         quests = []
 
     st.caption("Uses your **saved** preferences - save the form first if you changed anything.")
+    place = st.text_input(
+        "Where are you right now?",
+        key="place",
+        placeholder="e.g. Riverdale, Toronto",
+        help="Used to look up the weather and real places nearby (the phone app uses your GPS instead).",
+    )
     if st.button("✨ Generate sidequest", type="primary", use_container_width=True):
         with st.spinner("Asking Gemma for a sidequest… this usually takes 10-60 seconds"):
             try:
-                quests.insert(0, api_client.generate_quest(user_id))
+                quests.insert(0, api_client.generate_quest(user_id, place=place))
             except BackendError as e:
                 handle_backend_error(e, "Couldn't generate a quest: ")
             else:

@@ -9,21 +9,25 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
+from typing import Callable
 
 from dotenv import load_dotenv
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import auth, db, friends, history, journal, parties, library, retrieval, rewards, streak, taste as taste_mod
+from . import auth, db, friends, history, journal, parties, library, local_context, retrieval, rewards, routes, streak
+from . import taste as taste_mod
 from .llm import GemmaClient, LLMClient, LLMError
 from .quest_generator import generate_quest
 from .schemas import (
     FeedbackEntry,
     FeedbackIn,
+    GeoPoint,
     GroupSize,
     PreferencesIn,
     Quest,
     PreferencesOut,
+    QuestContext,
     QuestExample,
     QuestRecord,
     QuestSettings,
@@ -42,6 +46,7 @@ async def lifespan(_: FastAPI):
     streak.init_streaks()
     friends.init_friends()
     parties.init_parties()
+    routes.init_routes()
     if not os.getenv("GEMMA_API_KEY") and "googleapis" in os.getenv(
         "GEMMA_BASE_URL", "https://generativelanguage.googleapis.com"
     ):
@@ -169,6 +174,36 @@ def get_retriever() -> retrieval.Retriever | None:
     return None
 
 
+ContextLookup = Callable[[GeoPoint, float, str], QuestContext]
+
+
+def get_context_lookup() -> ContextLookup:
+    """Dependency so tests can swap in fake weather/places (backend/local_context.py)."""
+    return local_context.lookup
+
+
+def local_conditions(
+    settings: QuestSettings | None, max_travel_km: float, lookup: ContextLookup | None
+) -> QuestContext | None:
+    """Weather, place name and real spots nearby for this quest - from the device's
+    location, or a place the user typed. None if we don't know where they are."""
+    if settings is None or lookup is None:
+        return None
+    location, hint = settings.location, ""
+    if location is None and settings.place and settings.place.strip():
+        hint = settings.place.strip()
+        location = local_context.geocode(hint)
+        if location is None:  # couldn't find it - still tell the model the place name
+            return QuestContext(place=hint)
+    if location is None:
+        return None
+    try:
+        return lookup(location, max_travel_km, hint)
+    except Exception as exc:  # never block a quest on the weather
+        log.warning("Local conditions lookup failed: %s", exc)
+        return None
+
+
 def find_examples(
     user_id: str,
     prefs: PreferencesIn,
@@ -176,6 +211,7 @@ def find_examples(
     retriever: retrieval.Retriever | None,
     k: int = 3,
     taste: taste_mod.Taste | None = None,
+    context: QuestContext | None = None,
 ) -> list[QuestExample]:
     """Top-k example quests from the vector library (Tiger or local), falling
     back to the user's own liked quests if no library is available. Pulls a
@@ -183,7 +219,10 @@ def find_examples(
     quests they dislike aren't shown to Gemma as inspiration."""
     if retriever is not None:
         try:
-            examples = retriever.retrieve(prefs, history, k=k * 3)
+            if context is not None and not context.is_empty:
+                examples = retriever.retrieve(prefs, history, k=k * 3, context=context)
+            else:
+                examples = retriever.retrieve(prefs, history, k=k * 3)
             if examples:
                 return taste_mod.rerank_examples(examples, taste, k)
         except retrieval.RetrievalError as exc:
@@ -197,13 +236,16 @@ def create_quest(
     user_id: str = UserId,
     llm: LLMClient = Depends(get_llm),
     retriever: retrieval.Retriever | None = Depends(get_retriever),
+    lookup: ContextLookup = Depends(get_context_lookup),
 ) -> QuestRecord:
     """Generate a new sidequest from the user's saved preferences and history.
 
     Optional body: this quest's minutes / difficulty / energy / distance
-    (picked right before each quest in the app); missing ones come from the profile."""
-    quest = generate_for(user_id, settings, llm, retriever)
-    return save_generated(user_id, quest, getattr(llm, "model", ""))
+    (picked right before each quest in the app) and where the user is
+    (`location` from the device, or a typed `place`) - used to look up the
+    weather and real places nearby. Missing settings come from the profile."""
+    quest, context = generate_for(user_id, settings, llm, retriever, lookup=lookup)
+    return routes.attach([save_generated(user_id, quest, getattr(llm, "model", ""), context)])[0]
 
 
 def generate_for(
@@ -212,9 +254,11 @@ def generate_for(
     llm: LLMClient,
     retriever: retrieval.Retriever | None,
     party_size: int | None = None,
-) -> Quest:
-    """One quest for this user's preferences + history (+ this quest's settings).
-    party_size: a group quest for that many friends (see backend/parties.py)."""
+    lookup: ContextLookup | None = None,
+) -> tuple[Quest, QuestContext | None]:
+    """One quest for this user's preferences + history (+ this quest's settings
+    and live local conditions). party_size: a group quest for that many friends
+    (see backend/parties.py)."""
     profile = db.get_preferences(user_id)
     if profile is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Save preferences before generating a quest")
@@ -233,7 +277,12 @@ def generate_for(
     if not taste.is_empty:
         log.info("Feedback loop for %s: %d rated, likes %s, dislikes %s, time x%s",
                  user_id, taste.rated, taste.liked_tags, taste.disliked_tags, taste.time_ratio)
-    examples = find_examples(user_id, prefs, feedback, retriever, taste=taste) or None
+    context = local_conditions(settings, prefs.environment.max_travel_km, lookup)
+    if context is not None:
+        w = context.weather
+        log.info("Local conditions for %s: %s; %s; %d places nearby", user_id, context.place or "?",
+                 f"{w.temp_c:.0f}C {w.condition}" if w else "no weather", len(context.nearby))
+    examples = find_examples(user_id, prefs, feedback, retriever, taste=taste, context=context) or None
     try:  # the user's last 10 quests + how they went (data/user_history.db)
         recent = history.recent(user_id)
     except Exception as exc:
@@ -241,15 +290,16 @@ def generate_for(
         recent = []
 
     try:
-        return generate_quest(prefs, examples, feedback, recent_quests=recent, taste=taste, llm=llm,
-                              party_size=party_size)
+        quest = generate_quest(prefs, examples, feedback, recent_quests=recent, taste=taste, llm=llm,
+                               party_size=party_size, context=context)
     except LLMError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    return quest, context
 
 
-def save_generated(user_id: str, quest: Quest, model: str) -> QuestRecord:
+def save_generated(user_id: str, quest: Quest, model: str, context: QuestContext | None = None) -> QuestRecord:
     """Store a generated quest for this user (+ the quest library and their history)."""
-    record = db.add_quest(user_id, quest, model=model)
+    record = db.add_quest(user_id, quest, model=model, context=context)
     try:  # also keep it in the quest library alongside the seeded quests
         library.add_generated(record.id, user_id, quest, model=record.model)
     except Exception as exc:
@@ -263,7 +313,7 @@ def save_generated(user_id: str, quest: Quest, model: str) -> QuestRecord:
 
 @app.get("/users/{user_id}/quests", response_model=list[QuestRecord])
 def read_quests(user_id: str = UserId, limit: int = Query(20, ge=1, le=100)) -> list[QuestRecord]:
-    return parties.attach(db.list_quests(user_id, limit))
+    return routes.attach(parties.attach(db.list_quests(user_id, limit)))
 
 
 @app.post("/users/{user_id}/quests/{quest_id}/feedback", response_model=QuestRecord)
@@ -272,6 +322,7 @@ def give_feedback(feedback: FeedbackIn, quest_id: int, user_id: str = UserId) ->
     if record is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Quest not found")
     parties.attach([record])
+    routes.attach([record])
     try:
         library.record_feedback(quest_id, feedback)
     except Exception as exc:
@@ -287,6 +338,41 @@ def give_feedback(feedback: FeedbackIn, quest_id: int, user_id: str = UserId) ->
 def read_stats(user_id: str = UserId) -> dict[str, int]:
     """{completed, generated, minutes_outside} - the counter on the app's Quest screen."""
     return db.quest_stats(user_id)
+
+
+# ---------------------------------------------------------------------------
+# Recorded route (the path walked during a quest; see backend/routes.py)
+# ---------------------------------------------------------------------------
+
+@app.put("/users/{user_id}/quests/{quest_id}/route", response_model=routes.RouteOut)
+def save_route(route: routes.RouteIn, quest_id: int, user_id: str = UserId) -> routes.RouteOut:
+    """Store the whole recorded path (replaces any earlier copy - safe to re-send)."""
+    return routes.save(user_id, quest_id, route)
+
+
+@app.get("/users/{user_id}/quests/{quest_id}/route", response_model=routes.RouteOut)
+def read_route(quest_id: int, user_id: str = UserId) -> routes.RouteOut:
+    route = routes.get(user_id, quest_id)
+    if route is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No route recorded for this quest")
+    return route
+
+
+@app.delete("/users/{user_id}/quests/{quest_id}/route", status_code=status.HTTP_204_NO_CONTENT)
+def delete_route(quest_id: int, user_id: str = UserId) -> None:
+    routes.delete(user_id, quest_id)  # already gone is fine
+
+
+@app.get("/users/{user_id}/conditions", response_model=QuestContext)
+def read_conditions(
+    user_id: str = UserId,
+    lat: float = Query(..., ge=-90, le=90),
+    lon: float = Query(..., ge=-180, le=180),
+    max_travel_km: float = Query(1.0, ge=0, le=5),
+    lookup: ContextLookup = Depends(get_context_lookup),
+) -> QuestContext:
+    """Weather + place + nearby spots at a position (the app shows it before you generate)."""
+    return lookup(GeoPoint(lat=lat, lon=lon), max_travel_km, "")
 
 
 # ---------------------------------------------------------------------------
@@ -430,18 +516,23 @@ def decline_party(party_id: int, user_id: str = UserId) -> parties.PartyOut:
 @app.post("/users/{user_id}/parties/{party_id}/start", response_model=parties.PartyOut)
 def start_party(
     party_id: int,
+    where: parties.StartIn | None = Body(None),
     user_id: str = UserId,
     llm: LLMClient = Depends(get_llm),
     retriever: retrieval.Retriever | None = Depends(get_retriever),
+    lookup: ContextLookup = Depends(get_context_lookup),
 ) -> parties.PartyOut:
-    """Host only: generate ONE quest for everyone who joined and give each of them a copy."""
+    """Host only: generate ONE quest for everyone who joined and give each of them a copy.
+    Optional body {location | place}: where the group is now (weather + nearby spots)."""
     joined, settings = parties.check_can_start(user_id, party_id)
-    quest = generate_for(user_id, settings, llm, retriever, party_size=len(joined))
+    if where is not None and (where.location is not None or where.place):
+        settings = (settings or QuestSettings()).model_copy(update={"location": where.location, "place": where.place})
+    quest, context = generate_for(user_id, settings, llm, retriever, party_size=len(joined), lookup=lookup)
     if not parties.mark_started(party_id, quest, len(joined)):
         raise HTTPException(status.HTTP_409_CONFLICT, "This group quest already started")
     model = getattr(llm, "model", "")
     for member in joined:
-        record = save_generated(member, quest, model)
+        record = save_generated(member, quest, model, context)
         parties.set_quest_id(party_id, member, record.id)
     return parties.get(party_id, user_id)
 

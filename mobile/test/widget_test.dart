@@ -9,22 +9,28 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sidequest/data/api_client.dart';
 import 'package:sidequest/data/app_state.dart';
 import 'package:sidequest/data/key_value_store.dart';
+import 'package:sidequest/data/location_service.dart';
 import 'package:sidequest/main.dart';
 import 'package:sidequest/models/generated_quest.dart';
+import 'package:sidequest/models/location.dart';
 import 'package:sidequest/models/streak.dart';
 import 'package:sidequest/screens/home_shell.dart';
 import 'package:sidequest/widgets/quest_journal.dart';
+import 'package:sidequest/widgets/route_map.dart';
 
 import 'fake_backend.dart';
+import 'fake_location.dart';
 
 late FakeBackend backend;
 late MemoryStore cache;
 late MemoryStore secure;
+late FakeLocation gps;
 
 AppState newState() => AppState(
       api: ApiClient(baseUrl: 'http://test', httpClient: backend.client),
       cache: cache,
       secure: secure,
+      location: gps,
     );
 
 /// The default test screen is 800x600, and ListView only builds items near the
@@ -126,6 +132,8 @@ void main() {
     backend = FakeBackend();
     cache = MemoryStore();
     secure = MemoryStore();
+    gps = FakeLocation(); // permission not given unless a test sets a position
+    RouteMap.tilesEnabled = false; // no network map tiles in tests
   });
 
   group('Sign up & log in', () {
@@ -1182,6 +1190,188 @@ void main() {
       await tapAndSettle(tester, find.byKey(const Key('cancel_party_5')));
       expect(find.byKey(const Key('party_5')), findsNothing);
       expect(backend.parties, isEmpty);
+    });
+  });
+
+  group('Location, weather and route map', () {
+    final start = DateTime(2026, 10, 10, 17, 0);
+    GeoPoint at(int step) => GeoPoint(
+          lat: 43.6677 + step * 0.0005, // ~56 m north per step
+          lon: -79.3534,
+          accuracyM: 8,
+          time: start.add(Duration(seconds: 30 * step)),
+        );
+
+    testWidgets('profile no longer asks about weather or surroundings', (tester) async {
+      await startLoggedIn(tester);
+      await tapAndSettle(tester, navItem('Account'));
+      await tapAndSettle(tester, find.byKey(const Key('edit_account_tile')));
+      expect(find.byKey(const Key('temperature_range')), findsNothing);
+      expect(find.byKey(const Key('surroundings_urban')), findsNothing);
+      expect(find.byKey(const Key('weather_rain')), findsNothing);
+      expect(find.byKey(const Key('live_conditions_note')), findsOneWidget);
+    });
+
+    testWidgets('with location: the Right now card shows weather + nearby, and the quest uses them', (tester) async {
+      gps.position = at(0);
+      await startLoggedIn(tester);
+      expect(gps.asked, 0); // opening the tab doesn't pop up a permission prompt
+      expect(textOf(tester, 'where_place'), 'Riverdale, Toronto');
+      expect(textOf(tester, 'where_weather'), '12°C, light rain');
+      expect(find.text('Riverdale Park · 350 m'), findsOneWidget);
+      expect(find.byKey(const Key('place_field')), findsNothing);
+
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      expect(backend.lastQuestSettings!['location'], {'lat': 43.6677, 'lon': -79.3534, 'accuracy_m': 8.0});
+      expect(backend.lastQuestSettings!.containsKey('place'), isFalse);
+      expect(textOf(tester, 'quest_conditions'), '📍 Riverdale, Toronto · 12°C, light rain');
+      expect(find.byKey(const Key('route_start')), findsOneWidget);
+    });
+
+    testWidgets('without location you can type where you are', (tester) async {
+      await startLoggedIn(tester);
+      expect(find.byKey(const Key('use_my_location')), findsOneWidget);
+      await enter(tester, 'place_field', 'Elora');
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      expect(backend.lastQuestSettings!['place'], 'Elora');
+      expect(backend.lastQuestSettings!.containsKey('location'), isFalse);
+      expect(textOf(tester, 'quest_conditions'), '📍 Elora · 12°C, light rain');
+    });
+
+    testWidgets('no location and nothing typed: the quest is still generated', (tester) async {
+      await startLoggedIn(tester);
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      expect(gps.asked, 1); // asked once, said no
+      expect(backend.lastQuestSettings!.containsKey('location'), isFalse);
+      expect(find.byKey(const Key('quest_card')), findsOneWidget);
+      expect(find.byKey(const Key('quest_conditions')), findsNothing);
+    });
+
+    testWidgets('location blocked: offers the settings instead', (tester) async {
+      gps.problem = LocationProblem.deniedForever;
+      await startLoggedIn(tester);
+      expect(find.byKey(const Key('use_my_location')), findsNothing); // asking again can't help
+      expect(textOf(tester, 'where_message'), contains('turn it on in your device settings'));
+      await tapAndSettle(tester, find.byKey(const Key('open_location_settings')));
+      expect(gps.settingsOpened, 1);
+    });
+
+    testWidgets('track the route, see it live, stop uploads it', (tester) async {
+      gps.position = at(0);
+      final state = await startLoggedIn(tester);
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      final questId = state.activeQuest!.id;
+
+      await tapAndSettle(tester, find.byKey(const Key('route_start')));
+      expect(gps.tracking, isTrue);
+      expect(find.byKey(const Key('tracking_chip')), findsOneWidget);
+      expect(find.byKey(const Key('route_waiting')), findsOneWidget);
+
+      for (var i = 0; i < 3; i++) {
+        gps.walkTo(at(i));
+        await tester.pumpAndSettle();
+      }
+      expect(state.route(questId), hasLength(3));
+      expect(find.byKey(const Key('route_map')), findsOneWidget);
+      expect(textOf(tester, 'route_summary'), '111 m · 1 min');
+
+      await tapAndSettle(tester, find.byKey(const Key('route_stop')));
+      expect(gps.tracking, isFalse);
+      expect(backend.routes[questId]!['points'], hasLength(3));
+      expect(state.pendingChanges, 0);
+      expect(find.text('Continue tracking'), findsOneWidget);
+    });
+
+    testWidgets('completing a quest stops tracking; the route shows in History', (tester) async {
+      gps.position = at(0);
+      final state = await startLoggedIn(tester);
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      final questId = state.activeQuest!.id;
+      await tapAndSettle(tester, find.byKey(const Key('route_start')));
+      gps.walkTo(at(0));
+      gps.walkTo(at(1));
+      await tester.pumpAndSettle();
+
+      await tapAndSettle(tester, find.byKey(const Key('star_5')));
+      await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
+      await continuePastStreak(tester);
+      expect(gps.tracking, isFalse);
+      expect(backend.routes[questId]!['points'], hasLength(2));
+
+      await tapAndSettle(tester, navItem('History'));
+      expect(find.textContaining('🗺 56 m'), findsOneWidget);
+      await tapAndSettle(tester, find.byKey(Key('history_quest_$questId')));
+      expect(find.byKey(const Key('route_map')), findsOneWidget);
+      expect(textOf(tester, 'route_summary'), '56 m · 1 min');
+      expect(find.byKey(const Key('route_start')), findsNothing); // completed - view only
+    });
+
+    testWidgets('a route recorded offline is sent when back online', (tester) async {
+      gps.position = at(0);
+      final state = await startLoggedIn(tester);
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      final questId = state.activeQuest!.id;
+      backend.online = false;
+      await tapAndSettle(tester, find.byKey(const Key('route_start')));
+      gps.walkTo(at(0));
+      gps.walkTo(at(1));
+      await tester.pumpAndSettle();
+      await tapAndSettle(tester, find.byKey(const Key('route_stop')));
+      expect(state.pendingChanges, 1);
+      expect(backend.routes, isEmpty);
+
+      backend.online = true;
+      await state.sync();
+      await tester.pumpAndSettle();
+      expect(state.pendingChanges, 0);
+      expect(backend.routes[questId]!['points'], hasLength(2));
+    });
+
+    testWidgets('a route recorded on another device is downloaded for the quest page', (tester) async {
+      final user = backend.addUser(prefs: Map.of(savedPrefs));
+      final q = backend.addQuest(user['id'] as String, feedback: {'completed': true, 'rating': 4, 'comment': '',
+          'time_logged_minutes': 10});
+      backend.routes[q['id'] as int] = {
+        'user': user['id'],
+        'points': [for (var i = 0; i < 4; i++) at(i).toJson()],
+      };
+      useTallScreen(tester);
+      await secure.write('session', jsonEncode(backend.sessionFor(user['id'] as String)));
+      final state = newState();
+      await state.restore();
+      await state.sync();
+      await tester.pumpWidget(SidequestApp(state: state));
+      await tester.pumpAndSettle();
+
+      await tapAndSettle(tester, navItem('History'));
+      await tapAndSettle(tester, find.byKey(Key('history_quest_${q['id']}')));
+      expect(backend.requests, contains('GET /users/${user['id']}/quests/${q['id']}/route'));
+      expect(state.route(q['id'] as int), hasLength(4));
+      expect(find.byKey(const Key('route_map')), findsOneWidget);
+      expect(textOf(tester, 'route_summary'), '167 m · 2 min');
+
+      await tapAndSettle(tester, find.byKey(const Key('route_delete')));
+      await tapAndSettle(tester, find.byKey(const Key('route_delete_confirm')));
+      expect(backend.routes, isEmpty);
+      expect(find.byKey(const Key('route_map')), findsNothing);
+    });
+
+    testWidgets('starting a group quest sends where the host is', (tester) async {
+      gps.position = at(0);
+      final me = backend.addUser(email: 'me@example.com', name: 'Me', prefs: Map.of(savedPrefs))['id'] as String;
+      final sam = backend.addUser(email: 'sam@example.com', name: 'Sam', prefs: Map.of(savedPrefs))['id'] as String;
+      backend.addFriendship(me, sam, accepted: true);
+      useTallScreen(tester);
+      await secure.write('session', jsonEncode(backend.sessionFor(me)));
+      final state = newState();
+      await state.restore();
+      await state.sync();
+      await state.createParty([sam], const QuestSettings(
+          minutes: 15, difficulty: 'easy', energy: 3, distanceKm: 1, group: 'pair'));
+      final party = backend.parties.single;
+      (party['members'] as Map<String, dynamic>)[sam] = 'joined';
+      await state.startParty(party['id'] as int);
+      expect(backend.lastStartBody, {'location': {'lat': 43.6677, 'lon': -79.3534, 'accuracy_m': 8.0}});
     });
   });
 }

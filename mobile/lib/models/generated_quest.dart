@@ -1,3 +1,5 @@
+import 'location.dart';
+
 /// A quest from Gemma (the backend's Quest model) plus the per-quest settings
 /// it was generated with.
 class GeneratedQuest {
@@ -96,6 +98,8 @@ class QuestSettings {
     required this.energy,
     required this.distanceKm,
     required this.group,
+    this.location,
+    this.place = '',
   });
 
   final int minutes;
@@ -104,11 +108,28 @@ class QuestSettings {
   final double distanceKm;
   final String group; // solo | pair | small_group | large_group
 
+  /// Where you are right now (GPS) - the server looks up the weather and real
+  /// places nearby. [place] is typed instead when location is off.
+  final GeoPoint? location;
+  final String place;
+
+  QuestSettings withWhere({GeoPoint? location, String? place}) => QuestSettings(
+        minutes: minutes,
+        difficulty: difficulty,
+        energy: energy,
+        distanceKm: distanceKm,
+        group: group,
+        location: location ?? this.location,
+        place: place ?? this.place,
+      );
+
   Map<String, dynamic> toJson() => {
         'duration_minutes': minutes,
         'difficulty': difficulty,
         'energy_level': energy,
         'max_travel_km': distanceKm,
         'group_size': group,
+        if (location != null) 'location': location!.toLocationJson(),
+        if (location == null && place.trim().isNotEmpty) 'place': place.trim(),
       };
 }

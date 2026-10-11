@@ -39,28 +39,10 @@ const accessibilityOptions = [
   PreferenceOption('accessible_restrooms', 'Accessible restrooms'),
 ];
 
-const surroundingsOptions = [
-  PreferenceOption('urban', 'Urban'),
-  PreferenceOption('suburban', 'Suburban'),
-  PreferenceOption('rural', 'Rural'),
-  PreferenceOption('wilderness', 'Wilderness'),
-  PreferenceOption('waterfront', 'Waterfront'),
-];
-
 const crowdOptions = [
   PreferenceOption('quiet', 'Quiet'),
   PreferenceOption('moderate', 'Some people'),
   PreferenceOption('busy', 'Busy is fine'),
-];
-
-const weatherAvoidOptions = [
-  PreferenceOption('rain', 'Rain'),
-  PreferenceOption('snow', 'Snow'),
-  PreferenceOption('wind', 'Wind'),
-  PreferenceOption('extreme_heat', 'Extreme heat'),
-  PreferenceOption('extreme_cold', 'Extreme cold'),
-  PreferenceOption('high_uv', 'High UV'),
-  PreferenceOption('poor_air_quality', 'Poor air quality'),
 ];
 
 // --- Chosen right before each quest ---------------------------------------------

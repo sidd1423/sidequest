@@ -1,18 +1,22 @@
 import 'package:flutter/material.dart';
 
 import '../../models/generated_quest.dart';
+import '../../models/location.dart';
 import '../../models/party.dart';
 import '../../models/preference_options.dart';
 import 'party_section.dart' show PartyMembers;
 
 /// The generated quest: title, summary, quick facts, steps and notes.
 class QuestCard extends StatelessWidget {
-  const QuestCard({super.key, required this.quest, this.party});
+  const QuestCard({super.key, required this.quest, this.party, this.conditions});
 
   final GeneratedQuest quest;
 
   /// Set for a group quest: who it's for and who's in.
   final PartyTag? party;
+
+  /// Place + weather when it was generated (null if location was off).
+  final QuestConditions? conditions;
 
   @override
   Widget build(BuildContext context) {
@@ -29,6 +33,14 @@ class QuestCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(quest.title, style: theme.textTheme.titleLarge),
+            if (conditions != null && conditions!.summary.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                conditions!.summary,
+                key: const Key('quest_conditions'),
+                style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+              ),
+            ],
             if (party != null) ...[
               const SizedBox(height: 8),
               Row(

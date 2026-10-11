@@ -1,4 +1,5 @@
 import 'generated_quest.dart';
+import 'location.dart';
 import 'party.dart';
 
 enum QuestStatus { suggested, completed, skipped }
@@ -13,6 +14,8 @@ class QuestRecord {
     this.feedback,
     this.feedbackPending = false,
     this.party,
+    this.conditions,
+    this.route,
   });
 
   final int id;
@@ -27,6 +30,12 @@ class QuestRecord {
   /// Set when this is a group quest with friends.
   final PartyTag? party;
 
+  /// Place + weather + nearby spots when the quest was generated (null if location was off).
+  final QuestConditions? conditions;
+
+  /// The recorded path's distance/duration, once uploaded (points: AppState.route).
+  final RouteSummary? route;
+
   String get title => quest.title;
   int? get rating => feedback?.rating;
 
@@ -38,6 +47,20 @@ class QuestRecord {
         feedback: f,
         feedbackPending: pending,
         party: party,
+        conditions: conditions,
+        route: route,
+      );
+
+  QuestRecord withRoute(RouteSummary? summary) => QuestRecord(
+        id: id,
+        quest: quest,
+        createdAt: createdAt,
+        status: status,
+        feedback: feedback,
+        feedbackPending: feedbackPending,
+        party: party,
+        conditions: conditions,
+        route: summary,
       );
 
   factory QuestRecord.fromJson(Map<String, dynamic> json, {double? distanceKm}) {
@@ -53,6 +76,8 @@ class QuestRecord {
       createdAt: DateTime.tryParse(json['created_at'] as String? ?? '') ?? DateTime.now(),
       feedbackPending: (json['_feedback_pending'] as bool?) ?? false,
       party: json['party'] == null ? null : PartyTag.fromJson(json['party'] as Map<String, dynamic>),
+      conditions: json['context'] == null ? null : QuestConditions.fromJson(json['context'] as Map<String, dynamic>),
+      route: json['route'] == null ? null : RouteSummary.fromJson(json['route'] as Map<String, dynamic>),
     );
   }
 
@@ -64,5 +89,7 @@ class QuestRecord {
         'created_at': createdAt.toIso8601String(),
         if (feedbackPending) '_feedback_pending': true,
         if (party != null) 'party': party!.toJson(),
+        if (conditions != null) 'context': conditions!.toJson(),
+        if (route != null) 'route': route!.toJson(),
       };
 }

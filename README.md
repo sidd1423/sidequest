@@ -2,8 +2,10 @@
 
 Sidequests are quick **5-30 minute things to do outside, right now** - small,
 low-friction nudges to get people out of the house more often. The app tailors
-each one to the user's interests, how much time they have, their energy,
-accessibility needs, what's around them and the weather they want to avoid.
+each one to the user's interests, how much time they have, their energy and
+accessibility needs - and to where they actually are: the live weather, time of
+day and real places nearby are looked up from their location for every quest.
+The app can also record the route you walk during a quest and show it on a map.
 
 ## Architecture
 
@@ -17,8 +19,8 @@ Streamlit UI (app.py)  ──HTTP/JSON──▶  FastAPI backend (backend/)  ─
 ```
 
 - **Frontend** `app.py`: preference form (interests, minutes available right
-  now (5-30), difficulty, energy, accessibility, surroundings / how far to go,
-  crowds, group, weather). Validates input with the
+  now (5-30), difficulty, energy, accessibility, how far to go, crowds, group),
+  plus a "Where are you right now?" box for each quest. Validates input with the
   shared schema, then sends it to the backend via `frontend/api_client.py`.
 - **Backend** `backend/main.py`: REST API that validates and stores preferences.
 - **Accounts** `backend/auth.py`: email + password sign-up/log-in. Passwords are
@@ -66,6 +68,42 @@ Gemma itself isn't retrained - it's personalised through the prompt every
 time.
 The backend log prints the learned taste on each generation.
 
+### Live location context (`backend/local_context.py`)
+
+Weather and "what's around you" are no longer profile questions. Each quest
+request can carry the device's position (`location: {lat, lon, accuracy_m}`)
+or a typed `place` ("Riverdale, Toronto", geocoded with Nominatim). The backend
+then looks up, in parallel and with short timeouts (all free, no API keys):
+
+- **Weather** from [Open-Meteo](https://open-meteo.com): temperature, feels-like,
+  condition, rain chance for the next 2 hours, wind, UV, day/night, sunset, US AQI.
+- **Place name** (neighbourhood, city) from OpenStreetMap Nominatim.
+- **Real outdoor spots** within your travel distance from the OpenStreetMap
+  Overpass API: parks, playgrounds, rivers, beaches, viewpoints, public art,
+  trails, historic sites... with distance and compass direction.
+
+This goes into the prompt as a "Right now, where they are" section, plus
+condition-specific hard rules (thunderstorm, icy, very hot/cold, windy, dark,
+bad air, sunset soon), and Gemma is told to build the quest around real listed
+places by exact name and never invent any. It also feeds the example-quest
+search. The snapshot is stored with the quest (`QuestRecord.context`) and shown
+on the quest card. Any lookup that fails is just left out - quests never wait on
+the weather. Results are cached in memory (weather 10 min, places 1 day).
+Config: `LOCAL_CONTEXT=off`, `CONTEXT_TIMEOUT`, `NOMINATIM_EMAIL` (recommended
+by the Nominatim usage policy), `OPEN_METEO_URL`, `AIR_QUALITY_URL`,
+`NOMINATIM_URL`, `OVERPASS_URL`.
+
+Group quests: the host's position is sent when they press Start (never stored
+on the invite, so invitees don't see it).
+
+### Recorded routes (`backend/routes.py`)
+
+The app records your path with GPS while you do a quest (foreground only) and
+uploads it as a whole (`PUT`, safe to resend from the offline outbox). The
+server stores it in `quest_routes` and works out distance (skipping fixes worse
+than 75 m and jumps faster than 54 km/h) and duration. Only you can read it;
+it's deleted with your account.
+
 ### API
 
 | Method | Path | Description |
@@ -79,7 +117,9 @@ The backend log prints the learned taste on each generation.
 | GET    | `/users/{user_id}/preferences` | Fetch saved preferences (404 if none) |
 | PUT    | `/users/{user_id}/preferences` | Create or update preferences |
 | DELETE | `/users/{user_id}/preferences` | Delete preferences |
-| POST   | `/users/{user_id}/quests` | Generate a new sidequest with Gemma. Optional body `{duration_minutes, group_size, difficulty, energy_level, max_travel_km}` overrides the profile for this quest |
+| POST   | `/users/{user_id}/quests` | Generate a new sidequest with Gemma. Optional body `{duration_minutes, group_size, difficulty, energy_level, max_travel_km, location: {lat, lon, accuracy_m}, place}` overrides the profile for this quest and says where you are (weather + nearby places) |
+| GET    | `/users/{user_id}/conditions?lat=&lon=&max_travel_km=` | Weather, place name and nearby spots at a position |
+| PUT / GET / DELETE | `/users/{user_id}/quests/{quest_id}/route` | Recorded route `{points: [{lat, lon, t, accuracy_m}]}` -> with `distance_m`, `duration_seconds` |
 | GET    | `/users/{user_id}/quests` | List the user's quests, newest first |
 | GET    | `/users/{user_id}/rewards` | Points, level, streaks, badges and recent points (rules in `backend/rewards.py`) |
 | GET    | `/users/{user_id}/streak?tz_offset_minutes=-240` | Duolingo-style daily streak: current/best, today's status, freezes, calendar days (rules in `backend/streak.py`) |
@@ -87,7 +127,7 @@ The backend log prints the learned taste on each generation.
 | GET    | `/users/{user_id}/parties` | Group quests you host, joined or are invited to |
 | POST   | `/users/{user_id}/parties` | Invite friends to a group quest: `{"friend_ids": [...], "settings": {...}}` |
 | POST   | `/users/{user_id}/parties/{id}/join` · `/decline` | Answer a group quest invite (joining after it started gives you the quest too) |
-| POST   | `/users/{user_id}/parties/{id}/start` | Host: generate ONE quest for everyone who joined (each gets a copy) |
+| POST   | `/users/{user_id}/parties/{id}/start` | Host: generate ONE quest for everyone who joined (each gets a copy). Optional body `{location}` or `{place}` |
 | DELETE | `/users/{user_id}/parties/{id}` | Host: cancel before it starts |
 | POST   | `/users/{user_id}/friends/requests` | Send a friend request: `{"email": ...}` (their account email) |
 | POST   | `/users/{user_id}/friends/requests/{id}/accept` · `/decline` | Answer a request sent to you |

@@ -6,8 +6,10 @@ never drift apart.
 
 Sidequests are short (5-30 minute) things to do OUTSIDE, RIGHT NOW - the
 point is to get people out of the house more often. So preferences describe
-how much time the user has right now and what's around them, not when or
-whether to go outside.
+how much time the user has right now, not when or whether to go outside.
+Where they are, the weather and what's nearby are looked up live from the
+device's location for every quest (backend/local_context.py) instead of
+being asked once in the profile.
 """
 
 from __future__ import annotations
@@ -63,14 +65,6 @@ class Setting(str, Enum):
     EITHER = "either"
 
 
-class Surroundings(str, Enum):
-    URBAN = "urban"
-    SUBURBAN = "suburban"
-    RURAL = "rural"
-    WILDERNESS = "wilderness"
-    WATERFRONT = "waterfront"
-
-
 class CrowdLevel(str, Enum):
     QUIET = "quiet"
     MODERATE = "moderate"
@@ -82,16 +76,6 @@ class GroupSize(str, Enum):
     PAIR = "pair"
     SMALL_GROUP = "small_group"
     LARGE_GROUP = "large_group"
-
-
-class WeatherCondition(str, Enum):
-    RAIN = "rain"
-    SNOW = "snow"
-    WIND = "wind"
-    EXTREME_HEAT = "extreme_heat"
-    EXTREME_COLD = "extreme_cold"
-    HIGH_UV = "high_uv"
-    POOR_AIR_QUALITY = "poor_air_quality"
 
 
 # ---------------------------------------------------------------------------
@@ -121,24 +105,9 @@ class Accessibility(BaseModel):
 class Environment(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    surroundings: list[Surroundings] = Field(default_factory=list, description="What's around the user now")
     crowd_tolerance: CrowdLevel = CrowdLevel.MODERATE
     group_size: GroupSize = GroupSize.SOLO
     max_travel_km: float = Field(1.0, ge=0, le=MAX_TRAVEL_KM, description="How far from where they are now")
-
-
-class WeatherConstraints(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    avoid: list[WeatherCondition] = Field(default_factory=list)
-    min_temp_c: int = Field(5, ge=-40, le=50)
-    max_temp_c: int = Field(30, ge=-40, le=50)
-
-    @model_validator(mode="after")
-    def check_range(self) -> "WeatherConstraints":
-        if self.min_temp_c > self.max_temp_c:
-            raise ValueError("min_temp_c must be less than or equal to max_temp_c")
-        return self
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +126,18 @@ class PreferencesIn(BaseModel):
     energy_level: int = Field(3, ge=1, le=5, description="1 = very low, 5 = very high")
     accessibility: Accessibility = Field(default_factory=Accessibility)
     environment: Environment = Field(default_factory=Environment)
-    weather: WeatherConstraints = Field(default_factory=WeatherConstraints)
+
+    @model_validator(mode="before")
+    @classmethod
+    def drop_legacy_fields(cls, data):
+        """Older apps (and queued offline edits) still send weather limits and
+        surroundings - accept and ignore them; they're looked up live now."""
+        if isinstance(data, dict) and ("weather" in data or "surroundings" in (data.get("environment") or {})):
+            data = dict(data)
+            data.pop("weather", None)
+            if isinstance(data.get("environment"), dict):
+                data["environment"] = {k: v for k, v in data["environment"].items() if k != "surroundings"}
+        return data
 
     @field_validator("custom_interests")
     @classmethod
@@ -178,9 +158,10 @@ class PreferencesIn(BaseModel):
     @staticmethod
     def upgrade_stored(data: dict) -> dict:
         """Adapt preferences saved by older versions of the app (which had
-        indoor/outdoor, time-of-day and hours-long durations) to the current
-        quick-outdoor-quest model, so they still load."""
+        indoor/outdoor, time-of-day, hours-long durations, surroundings and
+        weather limits) to the current quick-outdoor-quest model, so they still load."""
         data = dict(data)
+        data.pop("weather", None)  # now looked up live from the user's location
         avail = dict(data.get("availability") or {})
         avail.pop("preferred_times", None)
         if "duration_minutes" in avail:
@@ -188,6 +169,7 @@ class PreferencesIn(BaseModel):
         data["availability"] = avail
         env = dict(data.get("environment") or {})
         env.pop("setting", None)
+        env.pop("surroundings", None)  # now looked up live from the user's location
         if "max_travel_km" in env:
             env["max_travel_km"] = max(0.0, min(MAX_TRAVEL_KM, float(env["max_travel_km"])))
         data["environment"] = env
@@ -215,12 +197,27 @@ class QuestStatus(str, Enum):
     SKIPPED = "skipped"
 
 
+class GeoPoint(BaseModel):
+    """A position from the device (WGS84)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    lat: float = Field(..., ge=-90, le=90)
+    lon: float = Field(..., ge=-180, le=180)
+    accuracy_m: float | None = Field(None, ge=0, le=100_000)
+
+
 class QuestSettings(BaseModel):
     """Per-quest choices the mobile app asks for right before each quest.
 
-    Any field left out falls back to the saved profile."""
+    Any field left out falls back to the saved profile. `location` (from the
+    device) or `place` (typed, e.g. "Riverdale, Toronto") lets the backend look
+    up the weather and real places nearby; they aren't part of the profile."""
 
     model_config = ConfigDict(extra="forbid")
+
+    location: GeoPoint | None = None
+    place: str | None = Field(None, max_length=120, description="Where the user is, if location is off")
 
     duration_minutes: int | None = Field(None, ge=MIN_QUEST_MINUTES, le=MAX_QUEST_MINUTES)
     difficulty: Difficulty | None = None
@@ -338,6 +335,58 @@ class PartyTag(BaseModel):
     members: list[PartyMemberTag]
 
 
+class WeatherNow(BaseModel):
+    """Weather where the user is when the quest was made (Open-Meteo)."""
+
+    temp_c: float
+    feels_like_c: float | None = None
+    condition: str = ""  # e.g. "light rain"
+    weather_code: int | None = None  # WMO code
+    precipitation_mm: float | None = None
+    rain_chance_pct: int | None = None  # highest chance of rain/snow over the next 2 hours
+    wind_kmh: float | None = None
+    gusts_kmh: float | None = None
+    uv_index: float | None = None
+    is_day: bool | None = None
+    air_quality_index: int | None = None  # US AQI
+    local_time: str | None = None  # "17:40" in the user's time zone
+    sunrise: str | None = None  # "07:21"
+    sunset: str | None = None  # "18:52"
+
+
+class NearbyPlace(BaseModel):
+    """A real outdoor spot near the user (OpenStreetMap)."""
+
+    name: str
+    kind: str  # park, playground, viewpoint, river, beach, artwork, ...
+    distance_m: int
+    direction: str = ""  # N, NE, E, ...
+    lat: float | None = None
+    lon: float | None = None
+
+
+class QuestContext(BaseModel):
+    """Where/when a quest was generated - shown on the quest card and used in the prompt."""
+
+    place: str = ""  # "Riverdale, Toronto"
+    lat: float | None = None  # rounded to ~100 m
+    lon: float | None = None
+    weather: WeatherNow | None = None
+    nearby: list[NearbyPlace] = Field(default_factory=list)
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.place and self.weather is None and not self.nearby
+
+
+class RouteSummary(BaseModel):
+    """The recorded path for a quest (full points: GET .../route)."""
+
+    distance_m: int
+    duration_seconds: int
+    points: int
+
+
 class QuestRecord(BaseModel):
     """A stored quest plus its lifecycle metadata."""
 
@@ -349,6 +398,8 @@ class QuestRecord(BaseModel):
     created_at: datetime
     model: str = ""
     party: PartyTag | None = None  # group quest with friends
+    context: QuestContext | None = None  # weather + place when it was generated
+    route: RouteSummary | None = None  # the path the user recorded while doing it
 
 
 class PastQuest(BaseModel):

@@ -13,10 +13,13 @@ import '../home_shell.dart';
 ///   everyone who joined) or Cancel.
 /// Once it starts, the quest shows up as your quest on this screen.
 class PartySection extends StatefulWidget {
-  const PartySection({super.key, required this.settings});
+  const PartySection({super.key, required this.settings, this.place});
 
   /// This quest's settings as picked on the Quest tab (used for new invites).
   final QuestSettings Function() settings;
+
+  /// A typed place (when location is off) - sent when you start a group quest.
+  final String Function()? place;
 
   @override
   State<PartySection> createState() => _PartySectionState();
@@ -98,7 +101,7 @@ class _PartySectionState extends State<PartySection> {
             onJoin: () => _run(() => state.joinParty(p.id), partyId: p.id,
                 done: p.isOpen ? "You're in! ${p.hostName} will start it soon." : null),
             onDecline: () => _run(() => state.declineParty(p.id), partyId: p.id),
-            onStart: () => _run(() => state.startParty(p.id), partyId: p.id, done: 'Group quest started!'),
+            onStart: () => _run(() => state.startParty(p.id, place: widget.place?.call() ?? ''), partyId: p.id, done: 'Group quest started!'),
             onCancel: () => _run(() => state.cancelParty(p.id), partyId: p.id),
           ),
         const SizedBox(height: 4),

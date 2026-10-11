@@ -8,6 +8,7 @@ import '../models/account.dart';
 import '../models/friends.dart';
 import '../models/generated_quest.dart';
 import '../models/journal_entry.dart';
+import '../models/location.dart';
 import '../models/party.dart';
 import '../models/profile_preferences.dart';
 import '../models/quest_record.dart';
@@ -15,6 +16,7 @@ import '../models/rewards.dart';
 import '../models/streak.dart';
 import 'api_client.dart';
 import 'key_value_store.dart';
+import 'location_service.dart';
 
 /// Everything the app knows about the signed-in user, kept on the device so
 /// the app works offline.
@@ -31,20 +33,30 @@ import 'key_value_store.dart';
 ///   on pull-to-refresh, and after any request that reaches the server).
 /// - Only these need a connection: signing up, logging in, editing name/email
 ///   and generating a new quest (Gemma runs on the server).
+/// - Location: each new quest sends where you are, so the server can use the
+///   live weather and real places nearby. While you do a quest the app can
+///   record your route (foreground GPS); it's kept on the device and uploaded
+///   through the outbox like everything else.
 class AppState extends ChangeNotifier {
   /// [secure] holds the login session. The app passes the same
   /// shared_preferences store as [cache]; it's a separate parameter so a
   /// Keychain/Keystore-backed store can be dropped in later.
-  AppState({required this.api, required KeyValueStore cache, required KeyValueStore secure})
+  AppState({required this.api, required KeyValueStore cache, required KeyValueStore secure, LocationService? location})
       : _cache = cache,
-        _secure = secure;
+        _secure = secure,
+        location = location ?? DeviceLocationService();
 
   final ApiClient api;
+
+  /// GPS - swappable in tests.
+  final LocationService location;
   final KeyValueStore _cache;
   final KeyValueStore _secure;
 
   static const _sessionKey = 'session';
-  static const _cacheNames = ['profile', 'quests', 'outbox', 'meta', 'journal', 'rewards', 'streak', 'friends', 'parties'];
+  static const _cacheNames = [
+    'profile', 'quests', 'outbox', 'meta', 'journal', 'rewards', 'streak', 'friends', 'parties', 'routes',
+  ];
 
   Session? _session;
   ProfilePreferences? _profile;
@@ -63,6 +75,17 @@ class AppState extends ChangeNotifier {
   int? _activeQuestId;
   Map<int, List<JournalEntry>> _journals = {};
   final Map<String, Uint8List> _photoCache = {}; // downloaded photos, by client id (memory only)
+
+  // Location + weather (memory only) and recorded routes (cached).
+  GeoPoint? _here;
+  QuestConditions? _conditions;
+  LocationProblem? _locationProblem;
+  bool _locating = false;
+  Map<int, List<GeoPoint>> _routes = {};
+  int? _trackingQuestId;
+  StreamSubscription<GeoPoint>? _trackSub;
+  String? _trackingError;
+  int _unsavedPoints = 0;
 
   Session? get session => _session;
   Account? get account => _session?.account;
@@ -112,6 +135,22 @@ class AppState extends ChangeNotifier {
 
   /// Notes and photos for a quest, oldest first.
   List<JournalEntry> journal(int questId) => List.unmodifiable(_journals[questId] ?? const <JournalEntry>[]);
+
+  /// Where you are (last fix this session) and what's there: place, weather, nearby spots.
+  GeoPoint? get here => _here;
+  QuestConditions? get conditions => _conditions;
+
+  /// Why we couldn't get your location last time (null = fine / not tried).
+  LocationProblem? get locationProblem => _locationProblem;
+  bool get isLocating => _locating;
+
+  /// The path recorded for a quest (oldest point first).
+  List<GeoPoint> route(int questId) => List.unmodifiable(_routes[questId] ?? const <GeoPoint>[]);
+
+  /// The quest whose route is being recorded right now (null = not tracking).
+  int? get trackingQuestId => _trackingQuestId;
+  bool isTracking(int questId) => _trackingQuestId == questId;
+  String? get trackingError => _trackingError;
 
   /// Last request reached the server.
   bool get isOnline => _online;
@@ -167,6 +206,7 @@ class AppState extends ChangeNotifier {
       _friends = const FriendsData();
       _parties = const [];
       _seenPartyQuests = {};
+      _routes = {};
     }
   }
 
@@ -196,6 +236,13 @@ class AppState extends ChangeNotifier {
     _parties = parties == null
         ? const []
         : [for (final p in jsonDecode(parties) as List<dynamic>) Party.fromJson(p as Map<String, dynamic>)];
+    final routes = await _cache.read(_key('routes'));
+    _routes = {};
+    if (routes != null) {
+      (jsonDecode(routes) as Map<String, dynamic>).forEach((id, points) {
+        _routes[int.parse(id)] = [for (final p in points as List<dynamic>) GeoPoint.fromJson(p as Map<String, dynamic>)];
+      });
+    }
     final journal = await _cache.read(_key('journal'));
     _journals = {};
     if (journal != null) {
@@ -225,6 +272,9 @@ class AppState extends ChangeNotifier {
       if (_streak != null) 'streak:$id': jsonEncode(_streak!.toJson()),
       'friends:$id': jsonEncode(_friends.toJson()),
       'parties:$id': jsonEncode([for (final p in _parties) p.toJson()]),
+      'routes:$id': jsonEncode({
+        for (final e in _routes.entries) '${e.key}': [for (final p in e.value) p.toJson()],
+      }),
     };
     for (final entry in values.entries) {
       if (_session?.token != session.token) return; // logged out meanwhile - don't write it back
@@ -284,6 +334,13 @@ class AppState extends ChangeNotifier {
     // Forget the session first so a running sync stops writing this account's cache.
     api.token = null;
     _session = null;
+    await _trackSub?.cancel();
+    _trackSub = null;
+    _trackingQuestId = null;
+    _routes = {};
+    _here = null;
+    _conditions = null;
+    _locationProblem = null;
     for (final name in _cacheNames) {
       await _cache.delete('$name:${session.account.id}');
     }
@@ -336,6 +393,7 @@ class AppState extends ChangeNotifier {
 
   /// Rate a quest: shown right away, sent now or when back online.
   Future<void> sendFeedback(int questId, QuestFeedback feedback) async {
+    if (isTracking(questId)) await stopTracking(); // done (or given up) - the route gets uploaded too
     final now = clock();
     _outbox.removeWhere((op) => op['type'] == 'feedback' && op['quest_id'] == questId);
     _outbox.add({
@@ -365,18 +423,184 @@ class AppState extends ChangeNotifier {
 
   /// Ask the server (Gemma) for a new quest with this quest's settings.
   /// Throws [OfflineException] when offline.
+  ///
+  /// Sends where you are (a fresh GPS fix, or [QuestSettings.place] if you
+  /// typed one) so the quest fits the weather and real places nearby. If
+  /// location isn't available the quest is still generated, just without that.
   Future<QuestRecord> generateQuest(QuestSettings settings) async {
     await sync(refresh: false); // make sure the server has the latest preferences + ratings
     final userId = _session!.account.id;
+    final withWhere = await _withWhere(settings);
     final json = await _call(
-      () => api.post('/users/$userId/quests', settings.toJson(), ApiClient.generateTimeout),
+      () => api.post('/users/$userId/quests', withWhere.toJson(), ApiClient.generateTimeout),
     );
     final record = QuestRecord.fromJson(json as Map<String, dynamic>, distanceKm: settings.distanceKm);
     _quests = [record, ..._quests.where((q) => q.id != record.id)];
     _activeQuestId = record.id;
+    if (withWhere.location != null && record.conditions != null) _conditions = record.conditions; // freshest copy
     await _saveCache();
     notifyListeners();
     return record;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Location + live conditions
+  // ---------------------------------------------------------------------------
+
+  /// Typed place wins; otherwise a fresh fix (or the last one from the past
+  /// 10 minutes if GPS is slow). No location = settings unchanged.
+  Future<QuestSettings> _withWhere(QuestSettings settings) async {
+    if (settings.location != null || settings.place.trim().isNotEmpty) return settings;
+    final here = await _fix(ask: true);
+    return here == null ? settings : settings.withWhere(location: here);
+  }
+
+  Future<GeoPoint?> _fix({required bool ask}) async {
+    try {
+      final p = await location.current(ask: ask);
+      _here = p;
+      _locationProblem = null;
+      return p;
+    } on LocationException catch (e) {
+      // Not asked yet (quiet check when the tab opens): don't show it as a problem.
+      _locationProblem = (!ask && e.problem == LocationProblem.denied) ? null : e.problem;
+      final last = _here;
+      final fresh = last?.time != null && clock().difference(last!.time!).inMinutes < 10;
+      return fresh ? last : null;
+    } on Object {
+      _locationProblem = LocationProblem.unavailable;
+      return null;
+    } finally {
+      notifyListeners();
+    }
+  }
+
+  /// Find where you are and look up the weather + nearby spots there (shown
+  /// above the Generate button). [ask]: show the permission prompt if needed.
+  /// Quietly keeps the last copy when offline.
+  Future<void> locate({bool ask = true, double maxTravelKm = 1.0}) async {
+    if (_locating || _session == null) return;
+    _locating = true;
+    notifyListeners();
+    try {
+      final p = await _fix(ask: ask);
+      if (p == null || _session == null) return;
+      final userId = _session!.account.id;
+      final json = await _call(() => api.get(
+          '/users/$userId/conditions?lat=${p.lat}&lon=${p.lon}&max_travel_km=${maxTravelKm.toStringAsFixed(1)}'));
+      _conditions = QuestConditions.fromJson(json as Map<String, dynamic>);
+    } on OfflineException {
+      // keep the last copy
+    } on ApiException {
+      // e.g. an older server without /conditions - the quest still gets the location
+    } finally {
+      _locating = false;
+      notifyListeners();
+    }
+  }
+
+  /// Open the system settings to turn location (permission) on.
+  Future<void> openLocationSettings() =>
+      location.openSettings(_locationProblem ?? LocationProblem.denied);
+
+  // ---------------------------------------------------------------------------
+  // Route tracking (works offline; uploaded through the outbox)
+  // ---------------------------------------------------------------------------
+
+  /// Start recording your path for [questId] (keeps any points recorded
+  /// before, so you can pause and continue). Foreground only: the app needs to
+  /// stay open while you walk.
+  Future<void> startTracking(int questId) async {
+    if (_trackingQuestId == questId) return;
+    if (_trackingQuestId != null) await stopTracking();
+    _trackingQuestId = questId;
+    _trackingError = null;
+    // Queued now (not only on stop) so a route survives the app being closed
+    // mid-quest: whatever was saved gets uploaded on the next sync.
+    _queueRouteUpload(questId);
+    await _saveCache();
+    notifyListeners();
+    _trackSub = location.track().listen(
+      (p) => _addPoint(questId, p),
+      onError: (Object e) {
+        _trackingError = e is LocationException ? e.message : "Couldn't track your location.";
+        if (e is LocationException) _locationProblem = e.problem;
+        unawaited(stopTracking());
+      },
+      cancelOnError: true,
+    );
+  }
+
+  void _addPoint(int questId, GeoPoint p) {
+    if (_trackingQuestId != questId) return;
+    final points = _routes.putIfAbsent(questId, () => []);
+    final stamped = p.time == null ? GeoPoint(lat: p.lat, lon: p.lon, accuracyM: p.accuracyM, time: clock()) : p;
+    points.add(stamped);
+    _here = stamped;
+    _quests = [for (final q in _quests) q.id == questId ? q.withRoute(RouteSummary.measure(points)) : q];
+    if (++_unsavedPoints >= 10) {
+      _unsavedPoints = 0;
+      unawaited(_saveCache()); // a crash/close loses at most a few points
+    }
+    notifyListeners();
+  }
+
+  /// Stop recording and upload the route (now or when back online).
+  Future<void> stopTracking() async {
+    final questId = _trackingQuestId;
+    if (questId == null) return;
+    _trackingQuestId = null;
+    await _trackSub?.cancel();
+    _trackSub = null;
+    _unsavedPoints = 0;
+    _queueRouteUpload(questId);
+    await _saveCache();
+    notifyListeners();
+    unawaited(sync(refresh: false));
+  }
+
+  void _queueRouteUpload(int questId) {
+    _outbox.removeWhere((op) => (op['type'] == 'route' || op['type'] == 'route_delete') && op['quest_id'] == questId);
+    _outbox.add({'type': 'route', 'quest_id': questId}); // the whole route each time (PUT replaces it)
+  }
+
+  /// Throw away the recorded route for [questId] (here and on the server).
+  Future<void> deleteRoute(int questId) async {
+    if (isTracking(questId)) {
+      _trackingQuestId = null;
+      await _trackSub?.cancel();
+      _trackSub = null;
+    }
+    _routes.remove(questId);
+    _outbox.removeWhere((op) => op['type'] == 'route' && op['quest_id'] == questId);
+    _outbox.add({'type': 'route_delete', 'quest_id': questId});
+    _quests = [for (final q in _quests) q.id == questId ? q.withRoute(null) : q];
+    await _saveCache();
+    notifyListeners();
+    unawaited(sync(refresh: false));
+  }
+
+  /// Download a quest's route if it was recorded on another device. Offline:
+  /// shows nothing new.
+  Future<void> loadRoute(int questId) async {
+    final session = _session;
+    if (session == null || (_routes[questId]?.isNotEmpty ?? false)) return;
+    final matches = _quests.where((q) => q.id == questId);
+    if (matches.isEmpty || matches.first.route == null) return; // nothing on the server
+    try {
+      final json = await _call(() => api.get('/users/${session.account.id}/quests/$questId/route'));
+      if (_session?.token != session.token) return;
+      _routes[questId] = [
+        for (final p in (json as Map<String, dynamic>)['points'] as List<dynamic>)
+          GeoPoint.fromJson(p as Map<String, dynamic>),
+      ];
+      await _saveCache();
+      notifyListeners();
+    } on OfflineException {
+      // nothing cached
+    } on ApiException {
+      // deleted meanwhile
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -613,7 +837,15 @@ class AppState extends ChangeNotifier {
   Future<void> declineParty(int partyId) => _partyAction(partyId, 'decline');
 
   /// Host only: Gemma makes ONE quest for everyone who joined (takes a while).
-  Future<void> startParty(int partyId) => _partyAction(partyId, 'start', ApiClient.generateTimeout);
+  /// Sends where you are, so the group quest fits the weather and places nearby.
+  Future<void> startParty(int partyId, {String place = ''}) async {
+    final where = place.trim().isNotEmpty ? null : await _fix(ask: true);
+    final body = <String, dynamic>{
+      if (where != null) 'location': where.toLocationJson(),
+      if (where == null && place.trim().isNotEmpty) 'place': place.trim(),
+    };
+    await _partyAction(partyId, 'start', ApiClient.generateTimeout, body.isEmpty ? null : body);
+  }
 
   /// Host only, before it starts.
   Future<void> cancelParty(int partyId) async {
@@ -622,9 +854,10 @@ class AppState extends ChangeNotifier {
     await loadParties();
   }
 
-  Future<void> _partyAction(int partyId, String action, [Duration timeout = ApiClient.defaultTimeout]) async {
+  Future<void> _partyAction(int partyId, String action,
+      [Duration timeout = ApiClient.defaultTimeout, Map<String, dynamic>? body]) async {
     final userId = _session!.account.id;
-    await _call(() => api.post('/users/$userId/parties/$partyId/$action', null, timeout));
+    await _call(() => api.post('/users/$userId/parties/$partyId/$action', body, timeout));
     await loadParties(); // a started quest lands on the Quest screen
   }
 
@@ -700,6 +933,23 @@ class AppState extends ChangeNotifier {
             }
           } else if (op['type'] == 'log_delete') {
             await _call(() => api.delete('/users/$userId/logs/${op['client_id']}'));
+          } else if (op['type'] == 'route') {
+            final questId = op['quest_id'] as int;
+            final points = _routes[questId] ?? const <GeoPoint>[];
+            if (points.isNotEmpty) {
+              final json = await _call(() => api.put(
+                    '/users/$userId/quests/$questId/route',
+                    {'points': [for (final p in points) p.toJson()]},
+                  )) as Map<String, dynamic>;
+              final summary = RouteSummary(
+                distanceM: (json['distance_m'] as num).toInt(),
+                durationSeconds: (json['duration_seconds'] as num).toInt(),
+                points: points.length,
+              );
+              _quests = [for (final q in _quests) q.id == questId ? q.withRoute(summary) : q];
+            }
+          } else if (op['type'] == 'route_delete') {
+            await _call(() => api.delete('/users/$userId/quests/${op['quest_id']}/route'));
           }
         } on ApiException catch (e) {
           // Retry later: expired session, rate limits, timeouts, server trouble.
@@ -770,7 +1020,15 @@ class AppState extends ChangeNotifier {
         if (local.completed && !serverCompleted) completed++;
         if (!local.completed && serverCompleted) completed--;
       }
-      fresh.add(local == null ? q : q.withFeedback(local, pending: true));
+      var merged = local == null ? q : q.withFeedback(local, pending: true);
+      final points = _routes[q.id];
+      final routeQueued = _outbox.any((op) => op['type'] == 'route' && op['quest_id'] == q.id);
+      if (points != null && points.isNotEmpty && (routeQueued || isTracking(q.id))) {
+        merged = merged.withRoute(RouteSummary.measure(points)); // not uploaded yet
+      } else if (_outbox.any((op) => op['type'] == 'route_delete' && op['quest_id'] == q.id)) {
+        merged = merged.withRoute(null);
+      }
+      fresh.add(merged);
     }
     _quests = fresh;
     _completedCount = completed < 0 ? 0 : completed;

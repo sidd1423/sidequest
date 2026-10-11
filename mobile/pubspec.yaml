@@ -14,6 +14,9 @@ dependencies:
   http: ^1.5.0                     # talks to the FastAPI backend
   shared_preferences: ^2.5.3       # login session + offline cache
   image_picker: ^1.1.2             # photos for the quest log (camera on phones, files on desktop/web)
+  geolocator: ^14.0.2              # location for weather/nearby places + route tracking
+  flutter_map: ^8.2.1              # route map (OpenStreetMap tiles, no API key)
+  latlong2: ^0.9.1                 # coordinates for flutter_map
 
 dev_dependencies:
   flutter_test:

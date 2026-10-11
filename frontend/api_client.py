@@ -122,8 +122,11 @@ def save_preferences(user_id: str, prefs: PreferencesIn) -> dict:
 GENERATE_TIMEOUT = 360  # backend gives Gemma up to GEMMA_TIME_BUDGET (300s) incl. retries
 
 
-def generate_quest(user_id: str) -> dict:
-    resp = _request("POST", f"/users/{user_id}/quests", timeout=GENERATE_TIMEOUT)
+def generate_quest(user_id: str, place: str = "") -> dict:
+    """place: where the user is ("Riverdale, Toronto") - the backend looks up the
+    weather and nearby spots there. Empty = no location."""
+    body = {"place": place.strip()[:120]} if place.strip() else None
+    resp = _request("POST", f"/users/{user_id}/quests", timeout=GENERATE_TIMEOUT, json=body)
     if not resp.ok:
         raise BackendError(_detail(resp), resp.status_code)
     return resp.json()

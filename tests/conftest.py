@@ -14,3 +14,5 @@ def isolated_storage(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCAL_CONTEXT", "off")  # never call weather/map services from tests
     monkeypatch.delenv("SERPAPI_API_KEY", raising=False)  # tests fake SerpApi themselves
     monkeypatch.delenv("SENTRY_DSN", raising=False)
+    monkeypatch.setenv("PERSONAL_MODELS_PATH", str(tmp_path / "personal_models.db"))
+    monkeypatch.delenv("TINKER_API_KEY", raising=False)  # personal models off unless a test fakes Tinker

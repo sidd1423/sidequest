@@ -1,0 +1,15 @@
+# Backend-only dependencies, used by the Render deploy (render.yaml).
+# The full requirements.txt also installs Streamlit + test tools for local work.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+requests>=2.31
+httpx>=0.27
+python-dotenv>=1.0
+
+# Example-quest retrieval
+wordllama>=0.4          # offline embeddings for the local library
+psycopg[binary]>=3.1    # only needed for Tiger Data
+
+# Error + performance monitoring (only active when SENTRY_DSN is set)
+sentry-sdk[fastapi]>=2.35

@@ -281,6 +281,26 @@ uvicorn backend.main:app --reload     # backend on http://localhost:8000
 streamlit run app.py                  # UI on http://localhost:8501
 ```
 
+## Deploy to Render
+
+`render.yaml` is a Render Blueprint for the API (backend only; installs
+`requirements-server.txt`, Python 3.12.7).
+
+1. Push to GitHub, then in Render: **New -> Blueprint** -> pick this repo.
+2. Fill in the secrets it asks for: `GEMMA_API_KEY` (required), `NOMINATIM_EMAIL`
+   (your email), and optionally `SERPAPI_API_KEY`, `SENTRY_DSN`,
+   `TIGER_DATABASE_URL`, `CORS_ORIGINS` (only for the Flutter web build).
+3. Wait for the deploy, then open `https://<service>.onrender.com/health`.
+4. Point the clients at it:
+   `flutter run --dart-define=API_BASE_URL=https://<service>.onrender.com`
+   and `BACKEND_URL=https://<service>.onrender.com` for Streamlit.
+
+All SQLite databases (accounts, quests, photos, library, history) live on a 1 GB
+persistent disk at `/var/data`, which needs the paid Starter plan. On the free
+plan (`plan: free`, no `disk:` block, no `*_PATH` vars) the data is wiped on
+every deploy and the server sleeps after ~15 idle minutes. Your local `.db`
+files are not uploaded - the server starts empty and seeds the quest library.
+
 ## Test
 
 ```powershell

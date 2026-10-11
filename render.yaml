@@ -1,0 +1,72 @@
+# Render Blueprint for the Sidequest API (FastAPI).
+# Render dashboard -> New -> Blueprint -> pick this repo. Render asks for every
+# value marked `sync: false` (your secrets) when you create it.
+#
+# The SQLite databases (accounts, quests, photos, library, history) live on the
+# persistent disk at /var/data. A disk needs a paid instance (plan: starter).
+# To try it on the free plan instead: set `plan: free` and delete the `disk:`
+# block and the three *_PATH variables - but then all data is wiped on every
+# deploy/restart and the server sleeps after ~15 idle minutes.
+services:
+  - type: web
+    name: sidequest-api
+    runtime: python
+    plan: starter
+    region: ohio
+    branch: main
+    autoDeploy: true
+    buildCommand: pip install -r requirements-server.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips="*"
+    healthCheckPath: /health
+    disk:
+      name: sidequest-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+
+      # --- Storage (on the persistent disk) ---
+      - key: DATABASE_PATH
+        value: /var/data/sidequest.db
+      - key: LIBRARY_PATH
+        value: /var/data/quest_library.db
+      - key: HISTORY_PATH
+        value: /var/data/user_history.db
+
+      # --- Accounts ---
+      - key: AUTH_REQUIRED
+        value: "true"
+      - key: SESSION_DAYS
+        value: "90"
+      # Only needed for the Flutter *web* build: its https URL (comma-separate several)
+      - key: CORS_ORIGINS
+        sync: false
+
+      # --- Gemma (Google AI Studio by default) ---
+      - key: GEMMA_BASE_URL
+        value: https://generativelanguage.googleapis.com/v1beta/openai
+      - key: GEMMA_MODEL
+        value: gemma-4-26b-a4b-it
+      - key: GEMMA_API_KEY
+        sync: false
+      - key: GEMMA_TIMEOUT
+        value: "180"
+      - key: GEMMA_TIME_BUDGET
+        value: "300"
+      - key: GEMMA_MAX_TOKENS
+        value: "8192"
+
+      # --- Live location context (OpenStreetMap asks for a contact email) ---
+      - key: NOMINATIM_EMAIL
+        sync: false
+
+      # --- Optional extras (leave blank to skip) ---
+      - key: SERPAPI_API_KEY
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+      - key: SENTRY_ENVIRONMENT
+        value: production
+      - key: TIGER_DATABASE_URL
+        sync: false

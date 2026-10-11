@@ -4,7 +4,7 @@ publish_to: "none"
 version: 0.1.0+1
 
 environment:
-  sdk: ">=3.4.0 <4.0.0"
+  sdk: ">=3.5.0 <4.0.0"
 
 # Navigation uses Flutter's built-in Navigator; state uses a ChangeNotifier
 # (lib/data/app_state.dart) - no state-management package needed.
@@ -18,7 +18,7 @@ dependencies:
   flutter_map: ^8.2.1              # route map (OpenStreetMap tiles, no API key)
   latlong2: ^0.9.1                 # coordinates for flutter_map
   # 8.x on purpose: 9.x pulls in the `jni` package, whose C code doesn't compile on Windows (MSVC).
-  sentry_flutter: ^8.14.2          # crash + error reports (only when built with --dart-define=SENTRY_DSN=...)
+  sentry_flutter: ^9.30.1          # crash + error reports (only when built with --dart-define=SENTRY_DSN=...)
 
 dev_dependencies:
   flutter_test:

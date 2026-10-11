@@ -295,6 +295,19 @@ class FakeBackend {
       final p = preferences[userId];
       return p == null ? _error(404, 'No preferences saved for this user') : _json({...p, 'user_id': userId});
     }
+    if (segments[2] == 'quests' && segments.length == 4 && request.method == 'DELETE') {
+      // Only quests never started (no feedback); already gone is fine.
+      final id = int.parse(segments[3]);
+      final list = quests[userId] ?? [];
+      final matches = list.where((q) => q['id'] == id);
+      if (matches.isNotEmpty && matches.first['feedback'] != null) {
+        return _error(409, "This quest was started - it's kept in your history");
+      }
+      list.removeWhere((q) => q['id'] == id);
+      logs[userId]?.removeWhere((l) => l['quest_id'] == id);
+      routes.remove(id);
+      return http.Response('', 204);
+    }
     if (segments[2] == 'quests' && segments.length == 3) {
       if (request.method == 'GET') return _json([for (final q in quests[userId] ?? []) _withRoute(_withParty(q))]);
       if (preferences[userId] == null) return _error(404, 'Save preferences before generating a quest');

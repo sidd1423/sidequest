@@ -221,6 +221,27 @@ def get_quest(user_id: str, quest_id: int) -> QuestRecord | None:
     return _row_to_quest(row) if row else None
 
 
+def delete_unstarted_quest(user_id: str, quest_id: int) -> str:
+    """Remove a quest the user never started (replaced by a new one), as if it
+    was never made. Returns "deleted", "missing" (already gone / not theirs),
+    "rated" (finished or given up - kept) or "group" (a group quest copy - kept)."""
+    with connect() as conn:
+        row = conn.execute("SELECT feedback FROM quests WHERE id = ? AND user_id = ?", (quest_id, user_id)).fetchone()
+        if row is None:
+            return "missing"
+        if row["feedback"] is not None:
+            return "rated"
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'party_members'").fetchone() and conn.execute(
+            "SELECT 1 FROM party_members WHERE quest_id = ?", (quest_id,)
+        ).fetchone():
+            return "group"
+        for table in ("quest_logs", "quest_routes"):
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name = ?", (table,)).fetchone():
+                conn.execute(f"DELETE FROM {table} WHERE user_id = ? AND quest_id = ?", (user_id, quest_id))
+        conn.execute("DELETE FROM quests WHERE id = ? AND user_id = ?", (quest_id, user_id))
+    return "deleted"
+
+
 def list_quests(user_id: str, limit: int = 20) -> list[QuestRecord]:
     with connect() as conn:
         rows = conn.execute(

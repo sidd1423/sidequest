@@ -213,6 +213,20 @@ def record_feedback(app_quest_id: int, feedback: FeedbackIn, path: Path | None =
         conn.close()
 
 
+def delete_quest(app_quest_id: int, path: Path | None = None) -> bool:
+    """Forget one quest (deleted before it was started)."""
+    path = Path(path or history_path())
+    if not path.exists():
+        return False
+    conn = _connect(path)
+    try:
+        n = conn.execute("DELETE FROM user_quest_history WHERE app_quest_id = ?", (app_quest_id,)).rowcount
+        conn.commit()
+        return n > 0
+    finally:
+        conn.close()
+
+
 def delete_user(user_id: str, path: Path | None = None) -> int:
     """Remove a deleted account's quest history."""
     path = Path(path or history_path())

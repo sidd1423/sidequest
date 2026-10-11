@@ -87,6 +87,37 @@ def test_photo_step_tag_for_the_album(api):
     assert api.post(f"/users/{uid}/quests/{qid}/logs", headers=h, json=bad).status_code == 422
 
 
+def _in_side_dbs(qid):
+    import sqlite3
+    found = []
+    for path, table in ((library.library_path(), "quests"), (history.history_path(), "user_quest_history")):
+        if not path.exists():
+            found.append(False)
+            continue
+        with sqlite3.connect(path) as conn:
+            found.append(conn.execute(f"SELECT 1 FROM {table} WHERE app_quest_id = ?", (qid,)).fetchone() is not None)
+    return found
+
+
+def test_unstarted_quest_is_deleted_everywhere(api):
+    uid, h, qid = account(api)
+    assert _in_side_dbs(qid) == [True, True]
+    assert api.delete(f"/users/{uid}/quests/{qid}", headers=h).status_code == 204
+    assert api.delete(f"/users/{uid}/quests/{qid}", headers=h).status_code == 204  # outbox retry is fine
+    assert all(q["id"] != qid for q in api.get(f"/users/{uid}/quests", headers=h).json())
+    assert _in_side_dbs(qid) == [False, False]
+
+
+def test_started_quest_cannot_be_deleted(api):
+    uid, h, qid = account(api)
+    api.post(f"/users/{uid}/quests/{qid}/feedback", headers=h, json={"completed": False, "time_logged_minutes": 3})
+    r = api.delete(f"/users/{uid}/quests/{qid}", headers=h)
+    assert r.status_code == 409
+    assert any(q["id"] == qid for q in api.get(f"/users/{uid}/quests", headers=h).json())
+    other_uid, other_h, _ = account(api, "other@example.com")
+    assert api.delete(f"/users/{uid}/quests/{qid}", headers=other_h).status_code == 403
+
+
 def test_journal_adds_step_column_to_old_tables():
     with db.connect() as conn:
         conn.execute("DROP TABLE IF EXISTS quest_logs")

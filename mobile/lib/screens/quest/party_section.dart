@@ -4,6 +4,7 @@ import '../../data/api_client.dart';
 import '../../data/app_scope.dart';
 import '../../models/generated_quest.dart';
 import '../../models/party.dart';
+import '../../widgets/quest_run_widgets.dart' show confirmLeaveCurrentQuest;
 import '../home_shell.dart';
 
 /// "Quest with friends" on the Quest tab:
@@ -98,10 +99,21 @@ class _PartySectionState extends State<PartySection> {
           _PartyCard(
             party: p,
             busy: _busy.contains(p.id),
-            onJoin: () => _run(() => state.joinParty(p.id), partyId: p.id,
-                done: p.isOpen ? "You're in! ${p.hostName} will start it soon." : null),
+            onJoin: () async {
+              // Joining one that already started puts it on your Quest screen right away.
+              if (!p.isOpen && !await confirmLeaveCurrentQuest(context)) return;
+              if (!mounted) return;
+              await _run(() => state.joinParty(p.id), partyId: p.id,
+                  done: p.isOpen ? "You're in! ${p.hostName} will start it soon." : null);
+            },
             onDecline: () => _run(() => state.declineParty(p.id), partyId: p.id),
-            onStart: () => _run(() => state.startParty(p.id, place: widget.place?.call() ?? ''), partyId: p.id, done: 'Group quest started!'),
+            onStart: () async {
+              // The group quest takes over your Quest screen: give up the one you're on?
+              if (!await confirmLeaveCurrentQuest(context)) return;
+              if (!mounted) return;
+              await _run(() => state.startParty(p.id, place: widget.place?.call() ?? ''), partyId: p.id,
+                  done: 'Group quest started!');
+            },
             onCancel: () => _run(() => state.cancelParty(p.id), partyId: p.id),
           ),
         const SizedBox(height: 4),

@@ -122,6 +122,22 @@ def _connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def delete_generated(app_quest_id: int, path: Path | None = None) -> bool:
+    """Forget one generated quest (deleted before it was started)."""
+    path = Path(path or library_path())
+    if not path.exists():
+        return False
+    conn = _connect(path)
+    try:
+        n = conn.execute(
+            "DELETE FROM quests WHERE source = 'generated' AND app_quest_id = ?", (app_quest_id,)
+        ).rowcount
+        conn.commit()
+        return n > 0
+    finally:
+        conn.close()
+
+
 def delete_user(user_id: str, path: Path | None = None) -> int:
     """Remove a deleted account's generated quests (seed quests are untouched)."""
     path = Path(path or library_path())

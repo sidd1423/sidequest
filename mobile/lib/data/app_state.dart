@@ -482,8 +482,10 @@ class AppState extends ChangeNotifier {
     );
     final record = QuestRecord.fromJson(json as Map<String, dynamic>, distanceKm: settings.distanceKm);
     _quests = [record, ..._quests.where((q) => q.id != record.id)];
+    final previous = _activeQuestId;
+    if (previous != record.id) await leaveQuest(previous); // given up, or deleted if never started
     _activeQuestId = record.id;
-    await _dropRunUnless(record.id); // a new quest replaces one that was in progress
+    await _dropRunUnless(record.id);
     if (withWhere.location != null && record.conditions != null) _conditions = record.conditions; // freshest copy
     await _saveCache();
     notifyListeners();
@@ -543,6 +545,7 @@ class AppState extends ChangeNotifier {
   Future<void> resumeGivenUp(int questId) async {
     final matches = _quests.where((q) => q.id == questId);
     if (matches.isEmpty || matches.first.status == QuestStatus.completed) return;
+    if (_activeQuestId != questId) await leaveQuest(_activeQuestId);
     await _dropRunUnless(questId);
     final paused = _pausedRuns[questId]; // kept until it's rated again, in case this try is left behind
     final steps = matches.first.quest.steps.length;
@@ -554,6 +557,50 @@ class AppState extends ChangeNotifier {
     await _saveCache();
     notifyListeners();
     await startTracking(questId);
+  }
+
+  /// Something else takes over the Quest screen (a new quest, a group quest,
+  /// resuming another one). The quest you had there:
+  /// - started (or resumed) -> given up with the time so far: it's in History
+  ///   and can be resumed later;
+  /// - never started -> deleted everywhere, as if it was never made (group
+  ///   quest copies are just put aside);
+  /// - already given up / completed -> left as it is.
+  Future<void> leaveQuest(int? questId) async {
+    if (questId == null) return;
+    final matches = _quests.where((q) => q.id == questId);
+    if (matches.isEmpty) return;
+    final q = matches.first;
+    if (q.status == QuestStatus.completed) return;
+    final run = runFor(questId);
+    if (run != null) {
+      final now = clock();
+      final ended = run.ended ? run : run.end(now, gaveUp: true);
+      _run = ended; // sendFeedback keeps it for Resume
+      await sendFeedback(questId, QuestFeedback(
+        completed: false,
+        rating: q.feedback?.rating, // a resumed quest keeps what it was rated before
+        comment: q.feedback?.comment ?? '',
+        timeLoggedMinutes: ended.end(ended.endedAt!, gaveUp: true).minutes(now),
+      ));
+      return;
+    }
+    if (q.feedback == null && q.party == null) await _deleteUnstarted(questId);
+  }
+
+  /// Gone from the device now, from the server now or when back online.
+  Future<void> _deleteUnstarted(int questId) async {
+    if (isTracking(questId)) await stopTracking();
+    _quests = [for (final q in _quests) if (q.id != questId) q];
+    _journals.remove(questId);
+    _routes.remove(questId);
+    _pausedRuns.remove(questId);
+    if (_activeQuestId == questId) _activeQuestId = null;
+    _outbox.removeWhere((op) => op['quest_id'] == questId);
+    _outbox.add({'type': 'quest_delete', 'quest_id': questId});
+    await _saveCache();
+    notifyListeners();
+    unawaited(sync(refresh: false));
   }
 
   Future<void> _dropRunUnless(int questId) async {
@@ -952,12 +999,16 @@ class AppState extends ChangeNotifier {
     if (pullQuests && fresh.any((id) => !_quests.any((q) => q.id == id))) {
       await _refresh(session); // the new quest copy isn't on the device yet
     }
+    final previous = _activeQuestId;
     for (final id in fresh) {
       final matches = _quests.where((q) => q.id == id);
       if (matches.isEmpty) continue; // try again next time
       _seenPartyQuests.add(id);
       if (matches.first.status != QuestStatus.completed) _activeQuestId = id;
     }
+    // The group quest takes over the Quest screen: the one you had is given up
+    // (or deleted if never started). The app asks before Start / Join.
+    if (previous != null && _activeQuestId != previous) await leaveQuest(previous);
   }
 
   /// Invite friends to a group quest with this quest's settings. The quest is
@@ -1089,6 +1140,8 @@ class AppState extends ChangeNotifier {
             }
           } else if (op['type'] == 'route_delete') {
             await _call(() => api.delete('/users/$userId/quests/${op['quest_id']}/route'));
+          } else if (op['type'] == 'quest_delete') {
+            await _call(() => api.delete('/users/$userId/quests/${op['quest_id']}'));
           }
         } on ApiException catch (e) {
           // Retry later: expired session, rate limits, timeouts, server trouble.
@@ -1149,8 +1202,10 @@ class AppState extends ChangeNotifier {
     };
     final fresh = <QuestRecord>[];
     var completed = (stats['completed'] as num?)?.toInt() ?? _completedCount;
+    final deleting = {for (final op in _outbox) if (op['type'] == 'quest_delete') op['quest_id'] as int};
     for (final item in list) {
       final json = item as Map<String, dynamic>;
+      if (deleting.contains((json['id'] as num).toInt())) continue; // deleted here, not on the server yet
       final q = QuestRecord.fromJson(json, distanceKm: distances[(json['id'] as num).toInt()]);
       final local = pending[q.id];
       if (local != null) {

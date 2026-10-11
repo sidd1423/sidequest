@@ -70,8 +70,8 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
       );
 
   Future<void> _generate() async {
-    // Not finished the one you have? Ask before leaving it.
-    if (!await confirmQuitCurrentQuest(context) || !mounted) return;
+    // Started the one you have? Ask before giving it up (never started = just replaced).
+    if (!await confirmLeaveCurrentQuest(context) || !mounted) return;
     setState(() {
       _generating = true;
       _error = null;

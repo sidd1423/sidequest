@@ -61,35 +61,61 @@ class _RunClockState extends State<RunClock> {
   }
 }
 
-/// Before leaving the quest you haven't finished (generating a new one, or
-/// resuming another): "Quit this quest?". true = go ahead. Nothing to ask
-/// (no unfinished quest, or it's [exceptQuestId]) = true.
+/// Before something else takes over the Quest screen (a new quest, starting
+/// a group quest, resuming another one). true = go ahead.
 ///
-/// A quest you quit isn't shown in History (it stays in the database).
-Future<bool> confirmQuitCurrentQuest(BuildContext context, {int? exceptQuestId}) async {
+/// - Never started: nothing to ask - it's simply deleted (see
+///   AppState.leaveQuest).
+/// - Started (or resumed): "Give up on your current quest?" - it's saved in
+///   History as given up and can be resumed later.
+/// - Finished but not rated yet: asks to rate it first.
+Future<bool> confirmLeaveCurrentQuest(BuildContext context, {int? exceptQuestId}) async {
   final state = AppScope.read(context);
   final current = state.activeQuest;
   if (current == null || current.id == exceptQuestId) return true;
-  // Already given up (and not resumed): it's safely in History.
-  if (current.feedback != null && state.runFor(current.id) == null) return true;
+  final run = state.runFor(current.id);
+  if (run == null) return true; // never started (deleted) or already given up (in History)
+  if (run.ended && !run.gaveUp) {
+    final rate = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        key: const Key('rate_first_dialog'),
+        title: const Text('Rate your quest first'),
+        content: Text('You finished "${current.title}" - say how it went before starting another.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+            key: const Key('rate_first_open'),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Rate it'),
+          ),
+        ],
+      ),
+    );
+    if (rate == true && context.mounted) {
+      await Navigator.of(context).pushNamed(AppRoutes.questRun, arguments: current.id);
+    }
+    return false;
+  }
   final ok = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
-      key: const Key('quit_quest_dialog'),
-      title: const Text('Quit your current quest?'),
+      key: const Key('leave_quest_dialog'),
+      title: const Text('Give up on your current quest?'),
       content: Text(
-        'You haven\'t finished "${current.title}". If you quit, it won\'t be saved in your history.',
+        '"${current.title}" will be saved in your History as given up, with your time so far. '
+        'You can resume it from there later.',
       ),
       actions: [
         TextButton(
-          key: const Key('quit_quest_cancel'),
+          key: const Key('leave_quest_cancel'),
           onPressed: () => Navigator.pop(context, false),
-          child: const Text('Keep it'),
+          child: const Text('Keep going'),
         ),
         TextButton(
-          key: const Key('quit_quest_confirm'),
+          key: const Key('leave_quest_confirm'),
           onPressed: () => Navigator.pop(context, true),
-          child: const Text('Quit it'),
+          child: const Text('Give up'),
         ),
       ],
     ),

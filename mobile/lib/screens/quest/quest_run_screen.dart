@@ -32,8 +32,15 @@ class QuestRunScreen extends StatefulWidget {
 class _QuestRunScreenState extends State<QuestRunScreen> {
   bool _picking = false;
   QuestRun? _lastRun; // kept while the rating is sent (the run is cleared then)
+  final _note = TextEditingController(); // "quest log" note asked at the end
 
   int get questId => widget.questId;
+
+  @override
+  void dispose() {
+    _note.dispose();
+    super.dispose();
+  }
 
   Future<void> _takePhoto(int stepIndex) async {
     final state = AppScope.read(context);
@@ -83,6 +90,12 @@ class _QuestRunScreenState extends State<QuestRunScreen> {
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
     final wasExtended = state.streak.extendedToday;
+    // The quest log note first: once a quest is completed its log is locked.
+    final note = _note.text.trim();
+    if (note.isNotEmpty) {
+      await state.addNote(questId, note);
+      _note.clear();
+    }
     await state.sendFeedback(questId, feedback); // saved on the device; sent now or when online
     final synced = state.isOnline ? '' : " It'll sync when you're back online.";
     final message = feedback.completed
@@ -126,7 +139,7 @@ class _QuestRunScreenState extends State<QuestRunScreen> {
         ],
       ),
       body: run.ended
-          ? _EndedView(record: record, run: run, steps: steps, onSubmit: _submit)
+          ? _EndedView(record: record, run: run, steps: steps, note: _note, onSubmit: _submit)
           : _StepView(
               record: record,
               run: run,
@@ -339,11 +352,18 @@ class _LiveMap extends StatelessWidget {
 
 /// After "Finish quest" / "Give up": time, route, the photo album, and the rating.
 class _EndedView extends StatelessWidget {
-  const _EndedView({required this.record, required this.run, required this.steps, required this.onSubmit});
+  const _EndedView({
+    required this.record,
+    required this.run,
+    required this.steps,
+    required this.note,
+    required this.onSubmit,
+  });
 
   final QuestRecord record;
   final QuestRun run;
   final List<String> steps;
+  final TextEditingController note;
   final ValueChanged<QuestFeedback> onSubmit;
 
   @override
@@ -384,6 +404,43 @@ class _EndedView extends StatelessWidget {
           const SizedBox(height: 8),
           RouteMap(points: points, places: record.conditions?.nearby ?? const []),
         ],
+        const SizedBox(height: 16),
+        // --- Quest log: notes (asked here, at the end) ---------------------
+        Card(
+          key: const Key('end_log_card'),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Quest log', style: theme.textTheme.titleMedium),
+                for (final n in state.journal(record.id).where((e) => !e.isPhoto))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text('• ${n.text}'),
+                  ),
+                const SizedBox(height: 8),
+                TextField(
+                  key: const Key('end_note_field'),
+                  controller: note,
+                  minLines: 2,
+                  maxLines: 5,
+                  maxLength: 2000,
+                  textCapitalization: TextCapitalization.sentences,
+                  decoration: const InputDecoration(
+                    labelText: 'Write about your quest (optional)',
+                    hintText: 'What did you see? How did it go?',
+                    counterText: '',
+                  ),
+                ),
+                Text(
+                  'Saved to your quest log with your rating.',
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
+        ),
         const SizedBox(height: 16),
         QuestFeedbackForm(
           key: ValueKey('run_feedback_${record.id}_${run.gaveUp}'),

@@ -13,6 +13,7 @@ import 'package:sidequest/data/location_service.dart';
 import 'package:sidequest/main.dart';
 import 'package:sidequest/models/generated_quest.dart';
 import 'package:sidequest/models/location.dart';
+import 'package:sidequest/models/quest_record.dart';
 import 'package:sidequest/models/streak.dart';
 import 'package:sidequest/screens/home_shell.dart';
 import 'package:sidequest/widgets/quest_journal.dart';
@@ -493,7 +494,7 @@ void main() {
       expect(find.byKey(const Key('quest_card')), findsNothing);
 
       await tapAndSettle(tester, find.byKey(const Key('generate_button'))); // nothing unfinished: no question
-      expect(find.byKey(const Key('quit_quest_dialog')), findsNothing);
+      expect(find.byKey(const Key('leave_quest_dialog')), findsNothing);
       expect(find.text('Quest #2'), findsOneWidget);
       expect(find.byKey(const Key('start_quest_button')), findsOneWidget);
       expect(find.byKey(const Key('steps_hidden')), findsOneWidget);
@@ -625,31 +626,99 @@ void main() {
       expect(saved['feedback']['time_logged_minutes'], 8);
     });
 
-    testWidgets('generating while a quest is unfinished asks to quit it; a quit quest is not in History',
+    testWidgets('generating while a quest is started asks to give it up; it goes to History, resumable',
         (tester) async {
       final state = await startLoggedIn(tester);
+      var now = DateTime.now();
+      state.clock = () => now;
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
       final first = state.activeQuest!.id;
       await startQuest(tester);
+      await tapAndSettle(tester, find.byKey(const Key('run_next')));
+      now = now.add(const Duration(minutes: 3));
       await tester.pageBack();
       await tester.pumpAndSettle();
 
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
-      expect(find.byKey(const Key('quit_quest_dialog')), findsOneWidget);
-      await tapAndSettle(tester, find.byKey(const Key('quit_quest_cancel')));
+      expect(find.byKey(const Key('leave_quest_dialog')), findsOneWidget);
+      await tapAndSettle(tester, find.byKey(const Key('leave_quest_cancel')));
       expect(state.activeQuest!.id, first); // kept
       expect(find.byKey(const Key('resume_quest_button')), findsOneWidget);
 
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
-      await tapAndSettle(tester, find.byKey(const Key('quit_quest_confirm')));
+      await tapAndSettle(tester, find.byKey(const Key('leave_quest_confirm')));
       expect(find.text('Quest #2'), findsOneWidget);
       expect(state.questRun, isNull);
-      expect(state.historyQuests.map((q) => q.id), isNot(contains(first)));
-      expect(backend.quests[state.account!.id]!.any((q) => q['id'] == first), isTrue); // still in the database
+      // Given up, not lost: in History with its time, ready to resume at step 2.
+      await state.sync();
+      final saved = backend.quests[state.account!.id]!.firstWhere((q) => q['id'] == first);
+      expect(saved['status'], 'skipped');
+      expect(saved['feedback']['time_logged_minutes'], 3);
+      expect(state.historyQuests.map((q) => q.id), contains(first));
+      await tapAndSettle(tester, navItem('History'));
+      expect(find.textContaining('Gave up'), findsOneWidget);
+      expect(find.textContaining('Not done'), findsNothing);
+      await tapAndSettle(tester, find.byKey(Key('history_quest_$first')));
+      expect(find.text('Resume quest · from 3:00'), findsOneWidget);
 
-      // A quest not even started is asked about too.
+      // Resuming it gives up Quest #2? No - #2 was never started, so it's simply deleted.
+      final second = state.activeQuest!.id;
+      await tapAndSettle(tester, find.byKey(const Key('resume_from_history')));
+      expect(find.byKey(const Key('leave_quest_dialog')), findsNothing);
+      expect(textOf(tester, 'run_step_label'), 'Step 2 of 3');
+      await state.sync();
+      expect(state.quests.any((q) => q.id == second), isFalse);
+      expect(backend.quests[state.account!.id]!.any((q) => q['id'] == second), isFalse);
+    });
+
+    testWidgets('a quest never started is deleted (not kept anywhere) when a new one is generated', (tester) async {
+      final state = await startLoggedIn(tester);
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
-      expect(find.byKey(const Key('quit_quest_dialog')), findsOneWidget);
+      final first = state.activeQuest!.id;
+      await tapAndSettle(tester, find.byKey(const Key('generate_button'))); // no question to ask
+      expect(find.byKey(const Key('leave_quest_dialog')), findsNothing);
+      expect(find.text('Quest #2'), findsOneWidget);
+      await state.sync();
+      expect(state.quests.any((q) => q.id == first), isFalse);
+      expect(backend.quests[state.account!.id]!.any((q) => q['id'] == first), isFalse);
+      expect(backend.requests, contains('DELETE /users/${state.account!.id}/quests/$first'));
+    });
+
+    testWidgets('starting a group quest asks to give up the quest you are doing', (tester) async {
+      final me = backend.addUser(email: 'me@example.com', name: 'Me', prefs: Map.of(savedPrefs))['id'] as String;
+      final sam = backend.addUser(email: 'sam@example.com', name: 'Sam', prefs: Map.of(savedPrefs))['id'] as String;
+      backend.addFriendship(me, sam, accepted: true);
+      useTallScreen(tester);
+      await secure.write('session', jsonEncode(backend.sessionFor(me)));
+      final state = newState();
+      await state.restore();
+      await state.sync();
+      await tester.pumpWidget(SidequestApp(state: state));
+      await tester.pumpAndSettle();
+      await state.createParty([sam], const QuestSettings(
+          minutes: 15, difficulty: 'easy', energy: 3, distanceKm: 1, group: 'pair'));
+      final party = backend.parties.single;
+      (party['members'] as Map<String, dynamic>)[sam] = 'joined';
+      await state.loadParties();
+      await tester.pumpAndSettle();
+
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      final solo = state.activeQuest!.id;
+      await startQuest(tester);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      await tapAndSettle(tester, find.byKey(Key('start_party_${party['id']}')));
+      expect(find.byKey(const Key('leave_quest_dialog')), findsOneWidget);
+      await tapAndSettle(tester, find.byKey(const Key('leave_quest_cancel')));
+      expect(backend.parties.single['status'], 'open'); // not started
+      expect(state.activeQuest!.id, solo);
+
+      await tapAndSettle(tester, find.byKey(Key('start_party_${party['id']}')));
+      await tapAndSettle(tester, find.byKey(const Key('leave_quest_confirm')));
+      expect(backend.parties.single['status'], 'started');
+      expect(state.activeQuest!.id, isNot(solo));
+      expect(state.quests.firstWhere((q) => q.id == solo).status, QuestStatus.skipped); // given up, resumable
     });
 
     testWidgets('the quest you are doing is not in History until you finish or give up', (tester) async {
@@ -838,52 +907,63 @@ void main() {
       expect(find.text('Quest #1'), findsOneWidget);
     });
 
-    testWidgets('notes and photos are saved to the quest log and uploaded', (tester) async {
-      final state = await startLoggedIn(tester, quests: 1);
+    testWidgets('photos during the quest + a note at the end go to the quest log; History only shows them',
+        (tester) async {
+      final state = await startLoggedIn(tester);
       QuestJournal.pickPhoto = ({required bool camera}) async =>
           PickedPhoto(Uint8List.fromList(tinyPng), 'image/png');
       addTearDown(() => QuestJournal.pickPhoto = ({required bool camera}) async => null);
-      final questId = state.quests.single.id; // given up - its log can still be changed
-      // The quest log lives on the quest's page (History).
-      await tapAndSettle(tester, navItem('History'));
-      await tapAndSettle(tester, find.byKey(Key('history_quest_$questId')));
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      final questId = state.activeQuest!.id;
+      await startQuest(tester);
+      await tapAndSettle(tester, find.byKey(const Key('run_photo_button')));
+      await stepToEnd(tester);
 
-      await enter(tester, 'journal_note_field', 'Saw a heron by the pond');
-      await tapAndSettle(tester, find.byKey(const Key('add_note_button')));
-      await tapAndSettle(tester, find.byKey(const Key('add_photo_button')));
+      expect(find.byKey(const Key('end_note_field')), findsOneWidget); // asked at the end
+      await enter(tester, 'end_note_field', 'Saw a heron by the pond');
+      await tapAndSettle(tester, find.byKey(const Key('star_5')));
+      await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
+      await continuePastStreak(tester);
 
-      expect(find.text('Saw a heron by the pond'), findsOneWidget);
       final journal = state.journal(questId);
-      expect(journal.map((e) => e.kind), ['note', 'photo']);
-      expect(find.byKey(Key('journal_photo_${journal.last.clientId}')), findsOneWidget);
+      expect(journal.map((e) => e.kind), ['photo', 'note']);
       final saved = backend.logs[state.account!.id]!;
-      expect(saved.map((l) => l['kind']), ['note', 'photo']);
-      expect(base64Decode(saved.last['image'] as String), tinyPng);
+      expect(saved.map((l) => l['kind']), ['photo', 'note']);
+      expect(saved.last['text'], 'Saw a heron by the pond');
+      expect(base64Decode(saved.first['image'] as String), tinyPng);
       expect(state.pendingChanges, 0);
 
-      // delete the note
-      await tapAndSettle(tester, find.byKey(Key('delete_entry_${journal.first.clientId}')));
-      expect(find.text('Saw a heron by the pond'), findsNothing);
-      expect(backend.logs[state.account!.id]!.map((l) => l['kind']), ['photo']);
+      // History: rating, album and log to look at - nothing to edit.
+      await tapAndSettle(tester, navItem('History'));
+      await tapAndSettle(tester, find.byKey(Key('history_quest_$questId')));
+      expect(find.byKey(const Key('detail_rating_stars')), findsOneWidget);
+      expect(find.byIcon(Icons.star), findsNWidgets(5));
+      expect(find.byKey(const Key('quest_album')), findsOneWidget);
+      expect(find.text('Saw a heron by the pond'), findsOneWidget);
+      expect(find.byKey(const Key('feedback_form')), findsNothing);
+      expect(find.byKey(const Key('journal_note_field')), findsNothing);
+      expect(find.byKey(const Key('add_photo_button')), findsNothing);
+      expect(find.byKey(Key('delete_entry_${journal.first.clientId}')), findsNothing);
     });
 
-    testWidgets('quest log notes made offline sync later and show in History', (tester) async {
+    testWidgets('a note written at the end offline syncs later', (tester) async {
       final state = await startLoggedIn(tester, quests: 1);
       final id = state.quests.single.id;
       backend.online = false;
       await tapAndSettle(tester, navItem('History'));
       await tapAndSettle(tester, find.byKey(Key('history_quest_$id')));
-      await enter(tester, 'journal_note_field', 'Rainy but fun');
-      await tapAndSettle(tester, find.byKey(const Key('add_note_button')));
-      expect(find.textContaining('waiting to sync'), findsOneWidget);
-      expect(state.pendingChanges, 1);
+      await tapAndSettle(tester, find.byKey(const Key('resume_from_history'))); // works offline
+      await tapAndSettle(tester, find.byKey(const Key('run_give_up')));
+      await tapAndSettle(tester, find.byKey(const Key('give_up_confirm')));
+      await enter(tester, 'end_note_field', 'Rainy but fun');
+      await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
+      expect(state.pendingChanges, 2); // the note + the rating
 
       backend.online = true;
       await state.sync();
       await tester.pumpAndSettle();
       expect(state.pendingChanges, 0);
       expect(backend.logs[state.account!.id]!.single['text'], 'Rainy but fun');
-      expect(find.textContaining('waiting to sync'), findsNothing);
     });
 
     testWidgets('quest output no longer shows the reasoning line', (tester) async {

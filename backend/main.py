@@ -344,6 +344,26 @@ def give_feedback(feedback: FeedbackIn, quest_id: int, user_id: str = UserId) ->
     return record
 
 
+@app.delete("/users/{user_id}/quests/{quest_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_unstarted_quest(quest_id: int, user_id: str = UserId) -> None:
+    """A quest the user never started, replaced by a new one: removed everywhere
+    (quests, the quest library and the user history), as if it was never made.
+    Finished / given-up quests and group quest copies are kept (409).
+    Already gone is fine (the app's offline outbox may retry)."""
+    result = db.delete_unstarted_quest(user_id, quest_id)
+    if result == "rated":
+        raise HTTPException(status.HTTP_409_CONFLICT, "This quest was started - it's kept in your history")
+    if result == "group":
+        raise HTTPException(status.HTTP_409_CONFLICT, "Group quests are kept")
+    if result != "deleted":
+        return
+    for forget, where in ((library.delete_generated, "library"), (history.delete_quest, "user history")):
+        try:
+            forget(quest_id)
+        except Exception as exc:
+            log.warning("Couldn't delete quest %s from the %s: %s", quest_id, where, exc)
+
+
 @app.get("/users/{user_id}/stats")
 def read_stats(user_id: str = UserId) -> dict[str, int]:
     """{completed, generated, minutes_outside} - the counter on the app's Quest screen."""

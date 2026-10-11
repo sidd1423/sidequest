@@ -3,7 +3,7 @@
 # value marked `sync: false` (your secrets) when you create it.
 #
 # The SQLite databases (accounts, quests, photos, library, history) live on the
-# persistent disk at /var/data. A disk needs a paid instance (plan: starter).
+# persistent disk at /var/data. A disk needs a paid instance (plan: 0.5c-512mb = Starter).
 # To try it on the free plan instead: set `plan: free` and delete the `disk:`
 # block and the three *_PATH variables - but then all data is wiped on every
 # deploy/restart and the server sleeps after ~15 idle minutes.
@@ -11,7 +11,7 @@ services:
   - type: web
     name: sidequest-api
     runtime: python
-    plan: starter
+    plan: 0.5c-512mb   # "Starter": 0.5 CPU, 512 MB, $7/mo (enough: the app peaks ~140 MB)
     region: ohio
     branch: main
     autoDeploy: true

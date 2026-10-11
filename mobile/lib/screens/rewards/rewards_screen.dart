@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../app_routes.dart';
 import '../../data/app_scope.dart';
 import '../../models/rewards.dart';
+import '../../theme.dart';
 
 /// Rewards tab: points, level, streak, badges and what earned the points.
 /// Loaded from the server when the tab opens (and on pull-to-refresh); the
@@ -38,7 +39,7 @@ class _RewardsScreenState extends State<RewardsScreen> {
           children: rewards == null
               ? [
                   const SizedBox(height: 120),
-                  const Center(child: Icon(Icons.emoji_events_outlined, size: 48)),
+                  const Center(child: Icon(Icons.workspace_premium_outlined, size: 48)),
                   const SizedBox(height: 12),
                   Center(
                     child: Text(
@@ -54,11 +55,18 @@ class _RewardsScreenState extends State<RewardsScreen> {
                   const SizedBox(height: 24),
                   Text('Badges (${rewards.earnedBadges}/${rewards.badges.length})',
                       style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [for (final b in rewards.badges) _BadgeTile(badge: b)],
+                  const SizedBox(height: 10),
+                  GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: rewards.badges.length,
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      mainAxisSpacing: 10,
+                      crossAxisSpacing: 10,
+                      childAspectRatio: 0.78,
+                    ),
+                    itemBuilder: (context, i) => _BadgeTile(badge: rewards.badges[i]),
                   ),
                   const SizedBox(height: 24),
                   Text('Recent points', style: Theme.of(context).textTheme.titleMedium),
@@ -136,30 +144,44 @@ class _StatsRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Widget stat(IconData icon, String value, String label, String key, [VoidCallback? onTap]) => Expanded(
-          child: Card(
-            key: Key(key),
-            clipBehavior: Clip.antiAlias,
-            child: InkWell(
-              onTap: onTap,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-                child: Column(
-                  children: [
-                    Icon(icon),
-                    const SizedBox(height: 4),
-                    Text(value, style: Theme.of(context).textTheme.titleLarge),
-                    Text(label, textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall),
-                  ],
+          child: SizedBox(
+            height: 124,
+            child: Card(
+              key: Key(key),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: onTap,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(icon),
+                      const SizedBox(height: 6),
+                      Text(value, style: Theme.of(context).textTheme.titleLarge),
+                      const SizedBox(height: 2),
+                      Text(
+                        label,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
           ),
         );
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         stat(Icons.local_fire_department_outlined, '${AppScope.of(context).streak.current}', 'day streak',
             'stat_streak', () => Navigator.of(context).pushNamed(AppRoutes.streak)),
+        const SizedBox(width: 10),
         stat(Icons.check_circle_outline, '${rewards.completed}', 'completed', 'stat_completed'),
+        const SizedBox(width: 10),
         stat(Icons.timer_outlined, '${rewards.minutesOutside}', 'min outside', 'stat_minutes'),
       ],
     );
@@ -177,25 +199,40 @@ class _BadgeTile extends StatelessWidget {
     final earned = badge.earned;
     return Tooltip(
       message: badge.description,
-      child: SizedBox(
+      child: Card(
         key: Key('badge_${badge.id}'),
-        width: 104,
-        child: Card(
-          color: earned ? colors.secondaryContainer : colors.surfaceContainerHighest,
-          elevation: 0,
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: Column(
-              children: [
-                Icon(earned ? Icons.military_tech : Icons.lock_outline,
-                    size: 32, color: earned ? colors.onSecondaryContainer : colors.outline),
-                const SizedBox(height: 4),
-                Text(badge.name, textAlign: TextAlign.center, maxLines: 2,
-                    style: Theme.of(context).textTheme.labelLarge),
-                if (!earned)
-                  Text('${badge.progress}/${badge.goal}', style: Theme.of(context).textTheme.bodySmall),
-              ],
-            ),
+        color: earned ? colors.secondaryContainer : colors.surface,
+        elevation: 0,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 10, 8, 8),
+          child: Column(
+            children: [
+              Icon(
+                earned ? Icons.military_tech : Icons.lock_outline,
+                size: 32,
+                color: earned ? SidequestColors.ink : colors.outline,
+              ),
+              const SizedBox(height: 6),
+              Expanded(
+                child: Center(
+                  child: Text(
+                    badge.name,
+                    textAlign: TextAlign.center,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                ),
+              ),
+              Text(
+                earned ? 'Earned' : '${badge.progress}/${badge.goal}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: earned ? SidequestColors.copper : colors.onSurfaceVariant,
+                    ),
+              ),
+            ],
           ),
         ),
       ),
@@ -213,7 +250,11 @@ class _PointsTile extends StatelessWidget {
     return ListTile(
       key: Key('points_entry_${entry.questId}'),
       contentPadding: EdgeInsets.zero,
-      leading: CircleAvatar(child: Text('+${entry.points}')),
+      leading: CircleAvatar(
+        backgroundColor: SidequestColors.gold,
+        foregroundColor: SidequestColors.ink,
+        child: Text('+${entry.points}'),
+      ),
       title: Text(entry.title),
       subtitle: Text(entry.reasons.join(' · ')),
     );

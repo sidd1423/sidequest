@@ -5,8 +5,8 @@ import '../data/app_scope.dart';
 import '../models/streak.dart';
 
 /// Streak orange (the flame), and the "frozen day" blue.
-const streakOrange = Color(0xFFFF8A00);
-const freezeBlue = Color(0xFF4FA3E3);
+const streakOrange = Color(0xFFCC6F00);
+const freezeBlue = Color(0xFF3D6B8A);
 
 /// A flame that's lit once today's quest is done, grey until then.
 class StreakFlame extends StatelessWidget {

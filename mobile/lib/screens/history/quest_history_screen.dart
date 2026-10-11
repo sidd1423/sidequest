@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../app_routes.dart';
 import '../../data/app_scope.dart';
 import '../../models/quest_record.dart';
+import '../../widgets/brand_mark.dart';
 import '../home_shell.dart';
 
 /// History tab: quests you finished or gave up on, newest first (given-up
@@ -48,8 +49,8 @@ class QuestHistoryScreen extends StatelessWidget {
 
   static String _subtitle(QuestRecord q) {
     final parts = <String>['${q.quest.minutes} min', statusLabel(q.status)];
-    if (q.rating != null) parts.add('★' * q.rating!);
-    if (q.route != null && q.route!.distanceM > 0) parts.add('🗺 ${q.route!.label.split(' · ').first}');
+    if (q.rating != null) parts.add('${q.rating} ${q.rating == 1 ? 'star' : 'stars'}');
+    if (q.route != null && q.route!.distanceM > 0) parts.add(q.route!.label.split(' · ').first);
     return parts.join(' · ');
   }
 }
@@ -96,7 +97,7 @@ class _EmptyHistory extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.map_outlined, size: 48),
+                  const BrandMark(size: 64),
                   const SizedBox(height: 12),
                   const Text('No quests yet', textAlign: TextAlign.center),
                   const SizedBox(height: 16),

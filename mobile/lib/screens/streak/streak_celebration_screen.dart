@@ -64,7 +64,7 @@ class _StreakCelebrationScreenState extends State<StreakCelebrationScreen> with 
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.emoji_events, color: streakOrange),
+                      const Icon(Icons.workspace_premium, color: streakOrange),
                       const SizedBox(width: 8),
                       Text('Milestone: ${s.current} days!',
                           style: text.titleMedium?.copyWith(fontWeight: FontWeight.bold)),

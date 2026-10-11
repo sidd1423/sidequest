@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/preference_options.dart';
 import '../models/profile_preferences.dart';
+import 'option_tile_grid.dart';
 
 /// The "set once" quest preferences: interests, accessibility and crowds.
 /// Used by the sign-up preferences step and by Edit account. Minutes,
@@ -33,7 +34,7 @@ class _ProfilePreferencesFormState extends State<ProfilePreferencesForm> {
   Widget _heading(BuildContext context, String title, [String? subtitle]) {
     final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.only(top: 24, bottom: 8),
+      padding: const EdgeInsets.only(top: 24, bottom: 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -48,33 +49,35 @@ class _ProfilePreferencesFormState extends State<ProfilePreferencesForm> {
     );
   }
 
-  Widget _multiChips(String keyPrefix, List<PreferenceOption> options, Set<String> selected) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: [
+  Widget _multiTiles(String keyPrefix, List<PreferenceOption> options, Set<String> selected, {int columns = 3}) {
+    return OptionTileGrid(
+      columns: columns,
+      aspectRatio: columns == 2 ? 1.55 : 1.05,
+      tiles: [
         for (final o in options)
-          FilterChip(
+          SelectableOptionTile(
             key: Key('${keyPrefix}_${o.value}'),
-            label: Text(o.label),
+            label: o.label,
+            icon: o.icon,
             selected: selected.contains(o.value),
-            onSelected: (on) => _toggle(selected, o.value, on),
+            onTap: () => _toggle(selected, o.value, !selected.contains(o.value)),
           ),
       ],
     );
   }
 
-  Widget _singleChips(String keyPrefix, List<PreferenceOption> options, String current, ValueChanged<String> onPick) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: [
+  Widget _singleTiles(String keyPrefix, List<PreferenceOption> options, String current, ValueChanged<String> onPick) {
+    return OptionTileGrid(
+      columns: 3,
+      aspectRatio: 1.15,
+      tiles: [
         for (final o in options)
-          ChoiceChip(
+          SelectableOptionTile(
             key: Key('${keyPrefix}_${o.value}'),
-            label: Text(o.label),
+            label: o.label,
+            icon: o.icon,
             selected: current == o.value,
-            onSelected: (_) => _update(() => onPick(o.value)),
+            onTap: () => _update(() => onPick(o.value)),
           ),
       ],
     );
@@ -87,7 +90,7 @@ class _ProfilePreferencesFormState extends State<ProfilePreferencesForm> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _heading(context, 'Interests', 'Pick at least one'),
-        _multiChips('interest', interestOptions, _p.interests),
+        _multiTiles('interest', interestOptions, _p.interests),
         const SizedBox(height: 12),
         TextFormField(
           key: const Key('custom_interests'),
@@ -100,7 +103,7 @@ class _ProfilePreferencesFormState extends State<ProfilePreferencesForm> {
         ),
 
         _heading(context, 'Accessibility needs', 'Optional'),
-        _multiChips('access', accessibilityOptions, _p.accessibility),
+        _multiTiles('access', accessibilityOptions, _p.accessibility, columns: 2),
         const SizedBox(height: 12),
         TextFormField(
           initialValue: _p.accessibilityNotes,
@@ -110,7 +113,7 @@ class _ProfilePreferencesFormState extends State<ProfilePreferencesForm> {
         ),
 
         _heading(context, 'Crowds'),
-        _singleChips('crowd', crowdOptions, _p.crowd, (v) => _p.crowd = v),
+        _singleTiles('crowd', crowdOptions, _p.crowd, (v) => _p.crowd = v),
 
         const SizedBox(height: 24),
         const ListTile(

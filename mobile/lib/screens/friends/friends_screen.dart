@@ -136,7 +136,7 @@ class _FriendTile extends StatelessWidget {
     final stats = <String>[
       '${friend.questsThisWeek} ${friend.questsThisWeek == 1 ? 'quest' : 'quests'} this week',
       '${friend.minutesToday} min today',
-      '🔥 ${friend.currentStreak} day streak',
+      '${friend.currentStreak} day streak',
     ];
     return ListTile(
       key: Key('friend_${friend.userId}'),

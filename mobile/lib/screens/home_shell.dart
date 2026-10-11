@@ -113,8 +113,8 @@ class HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
             label: 'History',
           ),
           const NavigationDestination(
-            icon: Icon(Icons.emoji_events_outlined),
-            selectedIcon: Icon(Icons.emoji_events),
+            icon: Icon(Icons.workspace_premium_outlined),
+            selectedIcon: Icon(Icons.workspace_premium),
             label: 'Rewards',
           ),
           NavigationDestination(

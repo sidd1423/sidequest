@@ -385,7 +385,7 @@ class _EndedView extends StatelessWidget {
           color: run.gaveUp ? theme.colorScheme.surfaceContainerHigh : theme.colorScheme.primaryContainer,
           elevation: 0,
           child: ListTile(
-            leading: Icon(run.gaveUp ? Icons.directions_walk : Icons.emoji_events, size: 36),
+            leading: Icon(run.gaveUp ? Icons.directions_walk : Icons.workspace_premium, size: 36),
             title: Text(
               run.gaveUp ? 'You gave it a go' : 'Quest complete!',
               key: const Key('run_done_title'),

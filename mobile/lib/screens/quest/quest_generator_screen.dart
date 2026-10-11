@@ -5,6 +5,7 @@ import '../../data/app_scope.dart';
 import '../../monitoring.dart';
 import '../../models/generated_quest.dart';
 import '../../models/preference_options.dart';
+import '../../widgets/option_tile_grid.dart';
 import '../../widgets/quest_run_widgets.dart';
 import '../../widgets/streak_widgets.dart';
 import '../../widgets/where_you_are_card.dart';
@@ -133,46 +134,49 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
 
           // --- Per-quest settings ----------------------------------------
           heading('How many minutes do you have?'),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
+          OptionTileGrid(
+            columns: 3,
+            aspectRatio: 1.35,
+            tiles: [
               for (final m in minuteOptions)
-                ChoiceChip(
+                SelectableOptionTile(
                   key: Key('minutes_$m'),
-                  label: Text('$m min'),
+                  label: '$m min',
+                  icon: Icons.timer_outlined,
                   selected: _minutes == m,
-                  onSelected: (_) => setState(() => _minutes = m),
+                  onTap: () => setState(() => _minutes = m),
                 ),
             ],
           ),
 
           heading("Who's with you?"),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
+          OptionTileGrid(
+            columns: 2,
+            aspectRatio: 2.1,
+            tiles: [
               for (final o in groupOptions)
-                ChoiceChip(
+                SelectableOptionTile(
                   key: Key('group_${o.value}'),
-                  label: Text(o.label),
+                  label: o.label,
+                  icon: o.icon,
                   selected: _group == o.value,
-                  onSelected: (_) => setState(() => _group = o.value),
+                  onTap: () => setState(() => _group = o.value),
                 ),
             ],
           ),
 
           heading('Difficulty'),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
+          OptionTileGrid(
+            columns: 2,
+            aspectRatio: 2.1,
+            tiles: [
               for (final o in difficultyOptions)
-                ChoiceChip(
+                SelectableOptionTile(
                   key: Key('difficulty_${o.value}'),
-                  label: Text(o.label),
+                  label: o.label,
+                  icon: o.icon,
                   selected: _difficulty == o.value,
-                  onSelected: (_) => setState(() => _difficulty = o.value),
+                  onTap: () => setState(() => _difficulty = o.value),
                 ),
             ],
           ),
@@ -252,13 +256,21 @@ class _FeedbackSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final parts = <String>[feedback.completed ? '✅ Completed' : '⏸️ Gave up'];
-    if (feedback.rating != null) parts.add('★' * feedback.rating!);
+    final parts = <String>[feedback.completed ? 'Completed' : 'Gave up'];
+    if (feedback.rating != null) {
+      parts.add('${feedback.rating} ${feedback.rating == 1 ? 'star' : 'stars'}');
+    }
     if (feedback.timeLoggedMinutes > 0) parts.add('${feedback.timeLoggedMinutes} min logged');
     return Card(
       key: const Key('feedback_summary'),
       child: ListTile(
-        leading: Icon(pending ? Icons.cloud_upload_outlined : Icons.thumb_up_alt_outlined),
+        leading: Icon(
+          pending
+              ? Icons.cloud_upload_outlined
+              : feedback.completed
+                  ? Icons.check_circle_outline
+                  : Icons.pause_circle_outline,
+        ),
         trailing: pending ? const Tooltip(message: 'Waiting to sync', child: Icon(Icons.schedule)) : null,
         title: Text(parts.join(' · ')),
         subtitle: Text(feedback.comment.isEmpty ? 'Thanks for the feedback!' : '"${feedback.comment}"'),
@@ -285,7 +297,7 @@ class _CompletedCounter extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           children: [
-            Icon(Icons.emoji_events, color: colors.onPrimaryContainer, size: 32),
+            Icon(Icons.workspace_premium, color: colors.onPrimaryContainer, size: 32),
             const SizedBox(width: 12),
             Text('$count', key: const Key('completed_count'),
                 style: text.headlineMedium?.copyWith(color: colors.onPrimaryContainer)),

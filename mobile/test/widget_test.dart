@@ -481,7 +481,7 @@ void main() {
       expect(find.byKey(const Key('quest_card')), findsNothing); // off the Quest tab
       expect(find.textContaining('you can resume it'), findsOneWidget);
       await tapAndSettle(tester, navItem('History'));
-      expect(find.descendant(of: find.byKey(Key('history_quest_$questId')), matching: find.text('15 min · Gave up · ★★')),
+      expect(find.descendant(of: find.byKey(Key('history_quest_$questId')), matching: find.text('15 min · Gave up · 2 stars')),
           findsOneWidget);
     });
 
@@ -1440,7 +1440,7 @@ void main() {
       backend.friendStats[sam] = {'quests_this_week': 3, 'minutes_today': 25, 'current_streak': 4};
       await startAs(tester, me);
       await tapAndSettle(tester, navItem('Friends'));
-      expect(textOf(tester, 'friend_stats_$sam'), '3 quests this week · 25 min today · 🔥 4 day streak');
+      expect(textOf(tester, 'friend_stats_$sam'), '3 quests this week · 25 min today · 4 day streak');
       expect(backend.requests, contains('GET /users/$me/friends'));
     });
 
@@ -1585,7 +1585,7 @@ void main() {
       expect(textOf(tester, 'where_place'), 'Riverdale, Toronto');
       expect(textOf(tester, 'where_weather'), '12°C, light rain');
       expect(find.text('Riverdale Park · 350 m'), findsOneWidget);
-      expect(find.text('Don River · 600 m · ★4.6'), findsOneWidget); // Google rating (SerpApi)
+      expect(find.text('Don River · 600 m · 4.6'), findsOneWidget); // Google rating (SerpApi)
       expect(find.byKey(const Key('place_field')), findsNothing);
 
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
@@ -1686,7 +1686,7 @@ void main() {
       expect(backend.routes[questId]?['points'], hasLength(2));
 
       await tapAndSettle(tester, navItem('History'));
-      expect(find.textContaining('🗺 56 m'), findsOneWidget);
+      expect(find.textContaining('56 m'), findsOneWidget);
       await tapAndSettle(tester, find.byKey(Key('history_quest_$questId')));
       expect(find.byKey(const Key('route_map')), findsOneWidget);
       expect(textOf(tester, 'route_summary'), '56 m · 1 min');

@@ -16,12 +16,14 @@ from typing import Any, Sequence
 from pydantic import ValidationError
 
 from . import observability as obs
-from .llm import GemmaClient, LLMClient, LLMError, LLMTimeout
+from .llm import GemmaClient, LLMClient, LLMError, LLMServerError, LLMTimeout
 from .schemas import MIN_QUEST_MINUTES, FeedbackEntry, PastQuest, PreferencesIn, Quest, QuestContext, QuestExample
 from .taste import Taste, conflicts_with_taste, taste_block
 
 MAX_ATTEMPTS = 3
 MAX_TIMEOUT_RETRIES = 1     # a timeout is usually a busy server - retry once
+MAX_SERVER_RETRIES = 2      # Google sometimes answers 500 "internal error" / 503 / 429 - retry after a pause
+SERVER_RETRY_PAUSES = (3.0, 8.0)  # seconds before the 1st / 2nd retry
 DEFAULT_TIME_BUDGET = 300   # seconds for the whole generation, all attempts included
 
 log = logging.getLogger("sidequest.quests")
@@ -497,6 +499,7 @@ def _attempts(llm: LLMClient, prompt: str, profile: PreferencesIn, recent_quests
     started = time.monotonic()
     last_error = ""
     timeouts = 0
+    server_errors = 0
     attempts = 0
     while attempts < MAX_ATTEMPTS:
         if attempts and time.monotonic() - started > budget:
@@ -522,6 +525,10 @@ def _attempts(llm: LLMClient, prompt: str, profile: PreferencesIn, recent_quests
                 raw = llm.complete(attempt_prompt)
             except LLMTimeout as exc:
                 call["outcome"], failure = "timeout", exc
+            except LLMServerError as exc:
+                call["outcome"], failure = "server_error", exc
+                call["error"] = str(exc)[:300]
+                call["http_status"] = exc.status
             except LLMError as exc:
                 call["outcome"], failure = "error", exc
                 call["error"] = str(exc)[:300]
@@ -558,6 +565,14 @@ def _attempts(llm: LLMClient, prompt: str, profile: PreferencesIn, recent_quests
                 raise failure  # type: ignore[misc]
             log.warning("Inference API timed out - retrying once")
             continue  # a timeout doesn't use up one of the answer attempts
+        if call["outcome"] == "server_error":
+            server_errors += 1
+            pause = SERVER_RETRY_PAUSES[min(server_errors, len(SERVER_RETRY_PAUSES)) - 1]
+            if server_errors > MAX_SERVER_RETRIES or time.monotonic() - started + pause > budget:
+                raise failure  # type: ignore[misc]
+            log.warning("Inference API error (HTTP %s) - retrying in %.0fs", call.get("http_status"), pause)
+            time.sleep(pause)
+            continue  # doesn't use up one of the answer attempts
         if call["outcome"] == "error":
             raise failure  # type: ignore[misc]
         attempts += 1
@@ -592,5 +607,5 @@ def _describe_span(span, call: dict, prompt: str, raw: str | None) -> None:
             span.set_data("gen_ai.response.text", [raw[:20000]])
     if call["outcome"] == "timeout":
         span.set_status("deadline_exceeded")
-    elif call["outcome"] in ("error",):
+    elif call["outcome"] in ("error", "server_error"):
         span.set_status("internal_error")

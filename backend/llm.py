@@ -39,6 +39,15 @@ class LLMTimeout(LLMError):
     """The inference API didn't answer in time (often just a busy server - worth retrying)."""
 
 
+class LLMServerError(LLMError):
+    """The inference API had a temporary problem (HTTP 5xx "internal error", 429 rate limit,
+    503 overloaded) - worth retrying after a short pause."""
+
+    def __init__(self, message: str, status: int) -> None:
+        super().__init__(message)
+        self.status = status
+
+
 class LLMClient(Protocol):
     model: str
 
@@ -98,6 +107,11 @@ class GemmaClient:
             )
         if auth_problem:
             raise LLMError("Inference API rejected the key - check GEMMA_API_KEY in .env")
+        if resp.status_code == 429 or resp.status_code >= 500:
+            raise LLMServerError(
+                f"The inference API had a temporary problem (HTTP {resp.status_code}): {resp.text[:300]}",
+                resp.status_code,
+            )
         if not resp.ok:
             raise LLMError(f"Inference API error {resp.status_code}: {resp.text[:300]}")
 

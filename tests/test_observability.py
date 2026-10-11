@@ -184,3 +184,37 @@ def test_api_request_trace_contains_generation(sentry):
     assert tx["user"] == {"id": "tester"}
     assert any(s["op"] == "quest.generate" for s in spans)
     assert any(s["op"] == "gen_ai.chat" and s["data"].get("sidequest.outcome") == "ok" for s in spans)
+
+
+def test_gemma_500_is_retried_after_a_pause(monkeypatch):
+    """Google AI Studio sometimes answers HTTP 500 "internal error" - retry instead of failing the quest."""
+    from backend import quest_generator as qg
+    from backend.llm import LLMServerError
+    pauses = []
+    monkeypatch.setattr(qg.time, "sleep", lambda s: pauses.append(s))
+    llm = ScriptedLLM(LLMServerError("HTTP 500 internal error", 500), LLMServerError("HTTP 503", 503),
+                      json.dumps(GOOD))
+    assert generate_quest(PROFILE, llm=llm).title == "Puddle Mirror Hunt"
+    assert pauses == [3.0, 8.0]
+
+    llm = ScriptedLLM(*[LLMServerError("HTTP 500 internal error", 500)] * 3)
+    with pytest.raises(LLMServerError, match="500"):
+        generate_quest(PROFILE, llm=llm)
+
+
+def test_gemma_client_marks_5xx_and_429_as_temporary(monkeypatch):
+    from backend import llm as llm_mod
+
+    class R:
+        def __init__(self, status):
+            self.status_code, self.text, self.ok = status, '{"error":{"code":%d,"status":"INTERNAL"}}' % status, False
+
+    for status in (500, 503, 429):
+        monkeypatch.setattr(llm_mod.requests, "post", lambda *a, _s=status, **k: R(_s))
+        with pytest.raises(llm_mod.LLMServerError) as err:
+            llm_mod.GemmaClient(base_url="https://x.test", api_key="k").complete("p")
+        assert err.value.status == status
+    monkeypatch.setattr(llm_mod.requests, "post", lambda *a, **k: R(404))
+    with pytest.raises(LLMError) as err:
+        llm_mod.GemmaClient(base_url="https://x.test", api_key="k").complete("p")
+    assert not isinstance(err.value, llm_mod.LLMServerError)

@@ -64,47 +64,9 @@ spent, comment) changes the next quest in four places:
 4. **Validation**: a Gemma answer built around disliked tags, or too similar to
    a disliked quest, is rejected and Gemma is asked again with the reason.
 
-5. **Personal fine-tuned model** (optional, `backend/personal_model.py`) - see below.
-
+Gemma itself isn't retrained - it's personalised through the prompt every
+time.
 The backend log prints the learned taste on each generation.
-
-### Personal models (Tinker, optional)
-
-With `TINKER_API_KEY` set, every user gets their **own LoRA adapter**, trained
-with [Tinker](https://thinkingmachines.ai/tinker) on how their past quests went:
-
-- **Loved** quests (completed, 4-5 stars; or didn't finish but rated 5) are
-  reinforced with weighted fine-tuning on "the prompt -> that quest".
-- **Disliked, abandoned and didn't-finish** quests are pushed *down* with a
-  clipped PPO step (negative advantage), so the model learns what not to write
-  without being wrecked by a few bad quests.
-- **Recent quests weigh more**: weight halves every `PERSONAL_HALF_LIFE_DAYS`
-  (14) days and every `PERSONAL_HALF_LIFE_QUESTS` (8) newer quests, whichever
-  decays slower.
-
-| Outcome | Reward |
-|---|---|
-| Completed 5 / 4 / 3 / 2 / 1 stars | +1.0 / +0.6 / +0.1 / -0.5 / -1.0 |
-| Didn't finish, 5 / 4 / 3 / 2 / 1 stars | +0.5 / +0.2 / -0.3 / -0.8 / -1.0 |
-| Didn't finish, no rating | -0.6 |
-
-The first adapter is trained after `PERSONAL_MIN_FEEDBACK` (3) rated quests,
-then retrained in a background thread after every `PERSONAL_RETRAIN_EVERY` (3)
-new feedbacks (from the base model, on the whole recency-weighted history).
-A new adapter only goes live if a test quest from it is valid JSON; the old
-adapter checkpoint is then deleted.
-
-Tinker has no Gemma, so adapters are trained on `PERSONAL_BASE_MODEL`
-(default `Qwen/Qwen3.5-4B`). Gemma is still used for new users, if Tinker isn't
-configured, and as an automatic fallback whenever the personal model fails.
-The personal model still gets the full prompt (taste, last 10 quests,
-examples, weather) and the same validation/retries. The exact prompt of every
-quest is stored in `data/personal_models.db` as training input.
-
-Other settings: `PERSONAL_LORA_RANK` (16), `PERSONAL_TRAIN_STEPS` (8),
-`PERSONAL_LEARNING_RATE` (2e-4), `PERSONAL_MAX_EXAMPLES` (64),
-`PERSONAL_MAX_TOKENS` (1024), `PERSONAL_TIMEOUT` (90 s),
-`PERSONAL_MODELS=off` to disable while keeping the key.
 
 ### Live location context (`backend/local_context.py`)
 
@@ -188,8 +150,6 @@ it's deleted with your account.
 | GET    | `/users/{user_id}/logs/{log_id}/photo` | A photo's bytes |
 | DELETE | `/users/{user_id}/logs/{client_id}` | Delete a note or photo |
 | POST   | `/users/{user_id}/quests/{quest_id}/feedback` | Mark completed/skipped, rate 1-5, comment |
-| GET    | `/users/{user_id}/model` | Their personal model: `state` off/collecting/training/ready/failed, `version`, `reinforced`, `discouraged`, `feedback_until_retrain` |
-| POST   | `/users/{user_id}/model/train` | Retrain their personal model now, in the background (202; 409 before 3 rated quests; 503 without `TINKER_API_KEY`) |
 
 `/users/...` routes need `Authorization: Bearer <token>` (user ids look like
 `u_3f2a...`). Set `AUTH_REQUIRED=false` in `.env` to allow token-less requests

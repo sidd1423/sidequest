@@ -404,7 +404,6 @@ def generate_quest(
     llm: LLMClient | None = None,
     party_size: int | None = None,
     context: QuestContext | None = None,
-    prompt_out: list[str] | None = None,
 ) -> Quest:
     """Generate one sidequest tailored to `profile`.
 
@@ -416,14 +415,10 @@ def generate_quest(
       taste               patterns learned from ALL the user's feedback (taste.learn_taste)
       party_size          a group quest for this many friends together (parties.py)
       context             weather + place + real nearby spots right now (local_context.lookup)
-      prompt_out          if given, the prompt is appended to it (stored as the personal
-                          model's training input - backend/personal_model.py)
     """
     llm = llm or GemmaClient()
     recent_quests = list(recent_quests or [])
     prompt = build_prompt(profile, retrieved_examples, feedback_history, recent_quests, taste, party_size, context)
-    if prompt_out is not None:
-        prompt_out.append(prompt)
     model = getattr(llm, "model", "") or "unknown"
     with obs.span("quest.generate", "generate quest", model=model, prompt_chars=len(prompt),
                   party_size=party_size, has_location=context is not None and not context.is_empty,

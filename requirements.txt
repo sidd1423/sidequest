@@ -11,9 +11,6 @@ pydantic>=2.6
 wordllama>=0.4          # offline embeddings for the local library
 psycopg[binary]>=3.1    # only needed for Tiger Data
 
-# Per-user fine-tuned quest models (optional - only used when TINKER_API_KEY is set)
-tinker>=0.33
-
 # Shared
 python-dotenv>=1.0
 

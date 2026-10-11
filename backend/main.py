@@ -16,7 +16,6 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response, stat
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import auth, db, friends, history, journal, parties, library, local_context, retrieval, rewards, routes, streak
-from . import personal_model
 from . import observability
 from . import taste as taste_mod
 from .llm import GemmaClient, LLMClient, LLMError
@@ -62,10 +61,6 @@ async def lifespan(_: FastAPI):
         history.init_history()  # create data/user_history.db + copy logged quests from the library
     except Exception as exc:
         log.warning("User history unavailable: %s", exc)
-    try:
-        personal_model.init()  # data/personal_models.db (per-user Tinker models, if TINKER_API_KEY is set)
-    except Exception as exc:
-        log.warning("Personal models unavailable: %s", exc)
     yield
 
 
@@ -130,8 +125,7 @@ def delete_me(confirm: auth.DeleteAccountIn, user: auth.UserOut = Depends(auth.c
     if not auth.password_matches(user.id, confirm.password):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Wrong password")
     db.delete_user_data(user.id)
-    for cleanup in (library.delete_user, history.delete_user, friends.delete_user, parties.delete_user,
-                    personal_model.delete_user):
+    for cleanup in (library.delete_user, history.delete_user, friends.delete_user, parties.delete_user):
         try:
             cleanup(user.id)
         except Exception as exc:
@@ -259,11 +253,8 @@ def create_quest(
     (picked right before each quest in the app) and where the user is
     (`location` from the device, or a typed `place`) - used to look up the
     weather and real places nearby. Missing settings come from the profile."""
-    llm = personal_model.llm_for(user_id, llm)  # their own fine-tuned model, if they have one
-    prompts: list[str] = []
-    quest, context = generate_for(user_id, settings, llm, retriever, lookup=lookup, prompt_out=prompts)
-    record = save_generated(user_id, quest, getattr(llm, "model", ""), context, prompt=prompts[0] if prompts else None)
-    return routes.attach([record])[0]
+    quest, context = generate_for(user_id, settings, llm, retriever, lookup=lookup)
+    return routes.attach([save_generated(user_id, quest, getattr(llm, "model", ""), context)])[0]
 
 
 def generate_for(
@@ -273,7 +264,6 @@ def generate_for(
     retriever: retrieval.Retriever | None,
     party_size: int | None = None,
     lookup: ContextLookup | None = None,
-    prompt_out: list[str] | None = None,
 ) -> tuple[Quest, QuestContext | None]:
     """One quest for this user's preferences + history (+ this quest's settings
     and live local conditions). party_size: a group quest for that many friends
@@ -311,22 +301,15 @@ def generate_for(
 
     try:
         quest = generate_quest(prefs, examples, feedback, recent_quests=recent, taste=taste, llm=llm,
-                               party_size=party_size, context=context, prompt_out=prompt_out)
+                               party_size=party_size, context=context)
     except LLMError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     return quest, context
 
 
-def save_generated(user_id: str, quest: Quest, model: str, context: QuestContext | None = None,
-                   prompt: str | None = None) -> QuestRecord:
-    """Store a generated quest for this user (+ the quest library and their history).
-    `prompt` (what the model was asked) becomes training input for their personal model."""
+def save_generated(user_id: str, quest: Quest, model: str, context: QuestContext | None = None) -> QuestRecord:
+    """Store a generated quest for this user (+ the quest library and their history)."""
     record = db.add_quest(user_id, quest, model=model, context=context)
-    if prompt:
-        try:
-            personal_model.save_prompt(record.id, user_id, prompt)
-        except Exception as exc:
-            log.warning("Couldn't store the prompt for quest %s: %s", record.id, exc)
     try:  # also keep it in the quest library alongside the seeded quests
         library.add_generated(record.id, user_id, quest, model=record.model)
     except Exception as exc:
@@ -358,10 +341,6 @@ def give_feedback(feedback: FeedbackIn, quest_id: int, user_id: str = UserId) ->
         history.record_feedback(quest_id, feedback)
     except Exception as exc:
         log.warning("Couldn't store feedback for quest %s in the user history: %s", quest_id, exc)
-    try:  # every few feedbacks, retrain their personal model in the background
-        personal_model.note_feedback(user_id)
-    except Exception as exc:
-        log.warning("Couldn't schedule personal model training for %s: %s", user_id, exc)
     return record
 
 
@@ -378,34 +357,11 @@ def delete_unstarted_quest(quest_id: int, user_id: str = UserId) -> None:
         raise HTTPException(status.HTTP_409_CONFLICT, "Group quests are kept")
     if result != "deleted":
         return
-    for forget, where in ((library.delete_generated, "library"), (history.delete_quest, "user history"),
-                          (personal_model.delete_quest, "personal model prompts")):
+    for forget, where in ((library.delete_generated, "library"), (history.delete_quest, "user history")):
         try:
             forget(quest_id)
         except Exception as exc:
             log.warning("Couldn't delete quest %s from the %s: %s", quest_id, where, exc)
-
-
-@app.get("/users/{user_id}/model", response_model=personal_model.PersonalModelStatus)
-def read_personal_model(user_id: str = UserId) -> personal_model.PersonalModelStatus:
-    """The user's own fine-tuned quest model: off / collecting feedback / training / ready."""
-    return personal_model.status(user_id)
-
-
-@app.post("/users/{user_id}/model/train", response_model=personal_model.PersonalModelStatus,
-          status_code=status.HTTP_202_ACCEPTED)
-def train_personal_model(user_id: str = UserId) -> personal_model.PersonalModelStatus:
-    """Retrain the user's personal model now (in the background)."""
-    if not personal_model.is_enabled():
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
-                            "Personal models are off - set TINKER_API_KEY in .env and restart")
-    current = personal_model.status(user_id)
-    if current.rated_quests < personal_model.min_feedback():
-        raise HTTPException(status.HTTP_409_CONFLICT,
-                            f"Rate at least {personal_model.min_feedback()} quests first "
-                            f"(you've rated {current.rated_quests})")
-    personal_model.schedule(user_id)
-    return personal_model.status(user_id)
 
 
 @app.get("/users/{user_id}/stats")
@@ -601,15 +557,12 @@ def start_party(
     joined, settings = parties.check_can_start(user_id, party_id)
     if where is not None and (where.location is not None or where.place):
         settings = (settings or QuestSettings()).model_copy(update={"location": where.location, "place": where.place})
-    llm = personal_model.llm_for(user_id, llm)  # the host's personal model plans the group quest
-    prompts: list[str] = []
-    quest, context = generate_for(user_id, settings, llm, retriever, party_size=len(joined), lookup=lookup,
-                                  prompt_out=prompts)
+    quest, context = generate_for(user_id, settings, llm, retriever, party_size=len(joined), lookup=lookup)
     if not parties.mark_started(party_id, quest, len(joined)):
         raise HTTPException(status.HTTP_409_CONFLICT, "This group quest already started")
     model = getattr(llm, "model", "")
     for member in joined:
-        record = save_generated(member, quest, model, context, prompt=prompts[0] if prompts else None)
+        record = save_generated(member, quest, model, context)
         parties.set_quest_id(party_id, member, record.id)
     return parties.get(party_id, user_id)
 

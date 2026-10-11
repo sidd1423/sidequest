@@ -334,7 +334,7 @@ class AppState extends ChangeNotifier {
     // Forget the session first so a running sync stops writing this account's cache.
     api.token = null;
     _session = null;
-    await _trackSub?.cancel();
+    _stopListening();
     _trackSub = null;
     _trackingQuestId = null;
     _routes = {};
@@ -550,13 +550,21 @@ class AppState extends ChangeNotifier {
     final questId = _trackingQuestId;
     if (questId == null) return;
     _trackingQuestId = null;
-    await _trackSub?.cancel();
+    _stopListening();
     _trackSub = null;
     _unsavedPoints = 0;
     _queueRouteUpload(questId);
     await _saveCache();
     notifyListeners();
     unawaited(sync(refresh: false));
+  }
+
+  /// Stop the GPS stream without waiting for it: a position stream's cancel()
+  /// can take a while (or never finish in tests), and nothing depends on it.
+  void _stopListening() {
+    final sub = _trackSub;
+    _trackSub = null;
+    if (sub != null) unawaited(sub.cancel());
   }
 
   void _queueRouteUpload(int questId) {
@@ -568,7 +576,7 @@ class AppState extends ChangeNotifier {
   Future<void> deleteRoute(int questId) async {
     if (isTracking(questId)) {
       _trackingQuestId = null;
-      await _trackSub?.cancel();
+      _stopListening();
       _trackSub = null;
     }
     _routes.remove(questId);

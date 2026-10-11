@@ -1278,7 +1278,11 @@ void main() {
 
       await tapAndSettle(tester, find.byKey(const Key('route_stop')));
       expect(gps.tracking, isFalse);
-      expect(backend.routes[questId]!['points'], hasLength(3));
+      expect(state.isTracking(questId), isFalse);
+      await state.sync(); // the upload stop started runs on the real event loop - wait for it
+      await tester.pumpAndSettle();
+      expect(backend.requests, contains('PUT /users/${state.account!.id}/quests/$questId/route'));
+      expect(backend.routes[questId]?['points'], hasLength(3));
       expect(state.pendingChanges, 0);
       expect(find.text('Continue tracking'), findsOneWidget);
     });
@@ -1295,9 +1299,11 @@ void main() {
 
       await tapAndSettle(tester, find.byKey(const Key('star_5')));
       await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
+      await state.sync(); // let the route + rating uploads finish
+      await tester.pumpAndSettle();
       await continuePastStreak(tester);
       expect(gps.tracking, isFalse);
-      expect(backend.routes[questId]!['points'], hasLength(2));
+      expect(backend.routes[questId]?['points'], hasLength(2));
 
       await tapAndSettle(tester, navItem('History'));
       expect(find.textContaining('🗺 56 m'), findsOneWidget);

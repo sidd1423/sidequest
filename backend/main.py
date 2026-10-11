@@ -16,6 +16,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response, stat
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import auth, db, friends, history, journal, parties, library, local_context, retrieval, rewards, routes, streak
+from . import observability
 from . import taste as taste_mod
 from .llm import GemmaClient, LLMClient, LLMError
 from .quest_generator import generate_quest
@@ -36,6 +37,7 @@ from .schemas import (
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("sidequest.api")
+observability.init()  # Sentry, if SENTRY_DSN is set - before the app so FastAPI gets instrumented
 
 
 @asynccontextmanager
@@ -266,6 +268,7 @@ def generate_for(
     """One quest for this user's preferences + history (+ this quest's settings
     and live local conditions). party_size: a group quest for that many friends
     (see backend/parties.py)."""
+    observability.set_user(user_id)
     profile = db.get_preferences(user_id)
     if profile is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Save preferences before generating a quest")

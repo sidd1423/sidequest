@@ -15,6 +15,7 @@ from typing import Any, Sequence
 
 from pydantic import ValidationError
 
+from . import observability as obs
 from .llm import GemmaClient, LLMClient, LLMError, LLMTimeout
 from .schemas import MIN_QUEST_MINUTES, FeedbackEntry, PastQuest, PreferencesIn, Quest, QuestContext, QuestExample
 from .taste import Taste, conflicts_with_taste, taste_block
@@ -348,35 +349,47 @@ def too_similar_to_disliked(quest: Quest, disliked: PastQuest) -> bool:
     return category is not None and len(tags & set(disliked.tags)) >= 2
 
 
-def _violations(
+# Why an answer was rejected - short codes for logs, Sentry tags and metrics.
+TOO_LONG, TOO_SHORT, INDOOR, REPEAT, SIMILAR_TO_DISLIKED, TASTE_CONFLICT = (
+    "too_long", "too_short", "indoor", "repeat", "similar_to_disliked", "taste_conflict")
+INVALID_JSON = "invalid_json"
+
+
+def rejections(
     quest: Quest, profile: PreferencesIn, recent: Sequence[PastQuest] = (), taste: Taste | None = None
-) -> list[str]:
-    problems = []
+) -> list[tuple[str, str]]:
+    """(reason code, message for the model) for every rule the quest breaks."""
+    problems: list[tuple[str, str]] = []
     available = profile.availability.duration_minutes
     if quest.estimated_minutes > available:
-        problems.append(f"estimated_minutes ({quest.estimated_minutes}) exceeds the user's {available} available minutes")
+        problems.append((TOO_LONG, f"estimated_minutes ({quest.estimated_minutes}) exceeds the user's "
+                                   f"{available} available minutes"))
     if quest.estimated_minutes < MIN_QUEST_MINUTES:
-        problems.append(f"estimated_minutes must be at least {MIN_QUEST_MINUTES}")
+        problems.append((TOO_SHORT, f"estimated_minutes must be at least {MIN_QUEST_MINUTES}"))
     if quest.setting.value == "indoor":
-        problems.append("the quest must take place outdoors")
+        problems.append((INDOOR, "the quest must take place outdoors"))
     for past in recent:
         if _norm_title(quest.title) == _norm_title(past.title):
-            problems.append(f"'{quest.title}' repeats one of the user's recent quests - create a new one")
+            problems.append((REPEAT, f"'{quest.title}' repeats one of the user's recent quests - create a new one"))
             break
     for past in recent:
         if past.disliked and too_similar_to_disliked(quest, past):
-            problems.append(
-                f"too similar to '{past.title}', which the user rated {past.rating}/5 - "
-                "pick a clearly different kind of activity"
-            )
+            problems.append((SIMILAR_TO_DISLIKED,
+                             f"too similar to '{past.title}', which the user rated {past.rating}/5 - "
+                             "pick a clearly different kind of activity"))
             break
     disliked = conflicts_with_taste(quest, taste)
     if disliked:
-        problems.append(
-            f"built around {', '.join(disliked)}, which this user consistently rates low or abandons - "
-            "pick a different kind of activity"
-        )
+        problems.append((TASTE_CONFLICT,
+                         f"built around {', '.join(disliked)}, which this user consistently rates low or "
+                         "abandons - pick a different kind of activity"))
     return problems
+
+
+def _violations(
+    quest: Quest, profile: PreferencesIn, recent: Sequence[PastQuest] = (), taste: Taste | None = None
+) -> list[str]:
+    return [msg for _, msg in rejections(quest, profile, recent, taste)]
 
 
 def generate_quest(
@@ -404,7 +417,82 @@ def generate_quest(
     llm = llm or GemmaClient()
     recent_quests = list(recent_quests or [])
     prompt = build_prompt(profile, retrieved_examples, feedback_history, recent_quests, taste, party_size, context)
+    model = getattr(llm, "model", "") or "unknown"
+    with obs.span("quest.generate", "generate quest", model=model, prompt_chars=len(prompt),
+                  party_size=party_size, has_location=context is not None and not context.is_empty,
+                  examples=len(retrieved_examples or []), recent_quests=len(recent_quests)) as outer:
+        run = _Run(model)
+        try:
+            quest = _attempts(llm, prompt, profile, recent_quests, taste, run)
+        except LLMError as exc:
+            run.finish(outer, "timeout" if isinstance(exc, LLMTimeout) else "failed")
+            obs.report_failed_generation(run.summary(), exc)
+            raise
+        run.finish(outer, "ok")
+        return quest
 
+
+class _Run:
+    """Everything about one generate_quest() call: each Gemma attempt and how it went."""
+
+    def __init__(self, model: str) -> None:
+        self.model = model
+        self.started = time.monotonic()
+        self.calls: list[dict] = []
+        self.outcome = ""
+
+    @property
+    def seconds(self) -> float:
+        return time.monotonic() - self.started
+
+    def record(self, call: dict) -> None:
+        self.calls.append(call)
+        reasons = ",".join(call.get("reasons", [])) or "-"
+        log.info("gemma attempt %d: %s in %.1fs (tokens in/out/reasoning %s/%s/%s; rejected for %s)",
+                 len(self.calls), call["outcome"], call.get("seconds", 0), call.get("input_tokens", "?"),
+                 call.get("output_tokens", "?"), call.get("reasoning_tokens", "?"), reasons)
+        obs.breadcrumb(f"gemma attempt {len(self.calls)}: {call['outcome']}", **call)
+        attrs = {"model": self.model, "outcome": call["outcome"]}
+        obs.metric("distribution", "gemma.call.duration", call.get("seconds", 0), "second", **attrs)
+        for key in ("input_tokens", "output_tokens", "reasoning_tokens"):
+            if call.get(key) is not None:
+                obs.metric("distribution", f"gemma.tokens.{key.removesuffix('_tokens')}", call[key], "none", **attrs)
+        for reason in call.get("reasons", []):
+            obs.metric("count", "gemma.rejections", 1, reason=reason, model=self.model)
+        if call["outcome"] == "timeout":
+            obs.metric("count", "gemma.timeouts", 1, model=self.model)
+
+    def summary(self) -> dict:
+        reasons = [r for c in self.calls for r in c.get("reasons", [])]
+        return {
+            "model": self.model,
+            "outcome": self.outcome,
+            "attempts": len(self.calls),
+            "seconds": round(self.seconds, 1),
+            "rejection_reasons": reasons,
+            "input_tokens": sum(c.get("input_tokens") or 0 for c in self.calls),
+            "output_tokens": sum(c.get("output_tokens") or 0 for c in self.calls),
+            "calls": self.calls,
+        }
+
+    def finish(self, outer, outcome: str) -> None:
+        self.outcome = outcome
+        summary = self.summary()
+        for key in ("outcome", "attempts", "seconds", "input_tokens", "output_tokens"):
+            outer.set_data(key, summary[key])
+        outer.set_data("rejection_reasons", ",".join(summary["rejection_reasons"]))
+        outer.set_tag("quest.outcome", outcome)
+        if outcome != "ok":
+            outer.set_status("internal_error" if outcome == "failed" else "deadline_exceeded")
+        obs.metric("distribution", "quest.generate.duration", summary["seconds"], "second",
+                   outcome=outcome, model=self.model)
+        obs.metric("distribution", "gemma.attempts", summary["attempts"], "none", outcome=outcome, model=self.model)
+        log.info("quest generation %s after %d Gemma call(s) in %.1fs", outcome, summary["attempts"],
+                 summary["seconds"])
+
+
+def _attempts(llm: LLMClient, prompt: str, profile: PreferencesIn, recent_quests: list[PastQuest],
+              taste: Taste | None, run: _Run) -> Quest:
     budget = float(os.getenv("GEMMA_TIME_BUDGET") or DEFAULT_TIME_BUDGET)
     started = time.monotonic()
     last_error = ""
@@ -420,28 +508,89 @@ def generate_quest(
                 f"\n\nYour previous answer was rejected: {last_error}. "
                 "Return a corrected JSON object only."
             )
-        try:
-            raw = llm.complete(attempt_prompt)
-        except LLMTimeout:
+        number = len(run.calls) + 1
+        with obs.span("gen_ai.chat", f"chat {run.model}", **{
+            "gen_ai.operation.name": "chat", "gen_ai.system": "gemma", "gen_ai.request.model": run.model,
+            "gen_ai.request.max_tokens": getattr(llm, "max_tokens", None), "sidequest.attempt": number,
+            "sidequest.retry_after_rejection": bool(last_error),
+        }) as span:
+            call_started = time.monotonic()
+            call: dict = {"attempt": number}
+            raw = None
+            failure: LLMError | None = None
+            try:
+                raw = llm.complete(attempt_prompt)
+            except LLMTimeout as exc:
+                call["outcome"], failure = "timeout", exc
+            except LLMError as exc:
+                call["outcome"], failure = "error", exc
+                call["error"] = str(exc)[:300]
+            stats = dict(getattr(llm, "last_call", None) or {})
+            call["seconds"] = round(stats.get("seconds") or (time.monotonic() - call_started), 2)
+            for key in ("input_tokens", "output_tokens", "reasoning_tokens", "total_tokens", "finish_reason",
+                        "http_status"):
+                if stats.get(key) is not None:
+                    call[key] = stats[key]
+            if raw is not None:
+                try:
+                    quest = parse_quest(raw)
+                except (ValueError, ValidationError) as exc:
+                    quest = None
+                    call["outcome"], call["reasons"] = "rejected", [INVALID_JSON]
+                    call["detail"] = str(exc).splitlines()[0][:300]
+                    log.warning("Unusable model output (%s). Start of output: %r", call["detail"], raw[:500])
+                if quest is not None:
+                    problems = rejections(quest, profile, recent_quests, taste)
+                    if problems:
+                        call["outcome"] = "rejected"
+                        call["reasons"] = [code for code, _ in problems]
+                        call["detail"] = "; ".join(msg for _, msg in problems)[:300]
+                        call["title"] = quest.title
+                    else:
+                        call["outcome"] = "ok"
+                        call["title"] = quest.title
+            _describe_span(span, call, attempt_prompt, raw)
+            run.record(call)
+
+        if call["outcome"] == "timeout":
             timeouts += 1
             if timeouts > MAX_TIMEOUT_RETRIES or time.monotonic() - started > budget:
-                raise
+                raise failure  # type: ignore[misc]
             log.warning("Inference API timed out - retrying once")
             continue  # a timeout doesn't use up one of the answer attempts
+        if call["outcome"] == "error":
+            raise failure  # type: ignore[misc]
         attempts += 1
-        try:
-            quest = parse_quest(raw)
-        except (ValueError, ValidationError) as exc:
-            last_error = str(exc).splitlines()[0][:300]
-            log.warning("Unusable model output (%s). Start of output: %r", last_error, raw[:500])
-            continue
-        problems = _violations(quest, profile, recent_quests, taste)
-        if problems:
-            last_error = "; ".join(problems)
-            continue
-        return quest
+        if call["outcome"] == "ok":
+            return quest  # type: ignore[return-value]
+        last_error = call["detail"]
 
     raise LLMError(
         f"Model didn't return a valid quest after {attempts} attempt(s) ({last_error}). "
         "The backend terminal shows what the model sent."
     )
+
+
+def _describe_span(span, call: dict, prompt: str, raw: str | None) -> None:
+    """Sentry gen_ai span attributes (shown in Sentry's AI Agents / Traces views)."""
+    span.set_data("sidequest.outcome", call["outcome"])
+    if call.get("reasons"):
+        span.set_data("sidequest.rejection_reasons", ",".join(call["reasons"]))
+        span.set_data("sidequest.rejection_detail", call.get("detail", ""))
+    for key, attr in (("input_tokens", "gen_ai.usage.input_tokens"), ("output_tokens", "gen_ai.usage.output_tokens"),
+                      ("reasoning_tokens", "gen_ai.usage.output_tokens.reasoning"),
+                      ("total_tokens", "gen_ai.usage.total_tokens")):
+        if call.get(key) is not None:
+            span.set_data(attr, call[key])
+    if call.get("finish_reason"):
+        span.set_data("gen_ai.response.finish_reasons", [call["finish_reason"]])
+    if call.get("title"):
+        span.set_data("sidequest.quest_title", call["title"])
+    if obs.send_prompts():
+        span.set_data("gen_ai.request.messages", [{"role": "user", "content": prompt[:20000]}])
+        if raw is not None:
+            span.set_data("gen_ai.response.text", [raw[:20000]])
+    if call["outcome"] == "timeout":
+        span.set_status("deadline_exceeded")
+    elif call["outcome"] in ("error",):
+        span.set_status("internal_error")

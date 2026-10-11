@@ -121,3 +121,12 @@ Log in  <──>  Sign up ──▶ Set up your quests   auth screens - no botto
    `flutter run --dart-define=API_BASE_URL=http://192.168.1.20:8000`.
    Debug Android builds allow plain `http://` (see
    `android/app/src/debug/AndroidManifest.xml`); use HTTPS for release.
+
+**Crash reports (Sentry, optional).** Create a Flutter project in Sentry and run
+with its DSN: `flutter run --dart-define=SENTRY_DSN=https://...@o123.ingest.sentry.io/789`
+(add `--dart-define=SENTRY_ENVIRONMENT=production` for release builds). Without
+it Sentry is off. When on (`lib/monitoring.dart`): crashes and uncaught errors
+(Dart, Flutter and native), screen breadcrumbs, every backend HTTP call as a
+breadcrumb/span, backend 5xx errors, and quest generations that failed or timed
+out on the device. Only the account id is attached - no screenshots, emails or
+locations.

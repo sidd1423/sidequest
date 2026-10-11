@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../data/api_client.dart';
 import '../../data/app_scope.dart';
+import '../../monitoring.dart';
 import '../../models/generated_quest.dart';
 import '../../models/preference_options.dart';
 import '../../widgets/quest_journal.dart';
@@ -76,9 +77,16 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
     });
     try {
       await AppScope.read(context).generateQuest(_settings().withWhere(place: _typedPlace));
-    } on OfflineException catch (e) {
+    } on OfflineException catch (e, st) {
+      // Only the app giving up after 360 s (slow Gemma) - not simply being offline.
+      if (e.timedOut) {
+        Monitoring.report(e, stackTrace: st, message: 'quest_generation_timeout',
+            data: {'minutes': _minutes, 'difficulty': _difficulty, 'group': _group});
+      }
       if (mounted) setState(() => _error = '${e.message} New quests need a connection - your history still works offline.');
-    } on ApiException catch (e) {
+    } on ApiException catch (e, st) {
+      Monitoring.report(e, stackTrace: st, message: 'quest_generation_failed',
+          data: {'status': e.statusCode, 'minutes': _minutes, 'difficulty': _difficulty, 'group': _group});
       if (mounted) setState(() => _error = "Couldn't get a quest: ${e.message}");
     } finally {
       if (mounted) setState(() => _generating = false);

@@ -19,9 +19,12 @@ class ApiException implements Exception {
 
 /// The backend couldn't be reached (no connection, server down, timeout).
 class OfflineException implements Exception {
-  const OfflineException([this.message = "Can't reach the Sidequest server."]);
+  const OfflineException([this.message = "Can't reach the Sidequest server.", this.timedOut = false]);
 
   final String message;
+
+  /// The server was reached but didn't answer in time (e.g. Gemma was slow).
+  final bool timedOut;
 
   @override
   String toString() => message;
@@ -94,7 +97,7 @@ class ApiClient {
       response = await http.Response.fromStream(await _http.send(request).timeout(timeout));
     } on TimeoutException {
       debugPrint('Sidequest API: $method $baseUrl$path timed out after ${timeout.inSeconds}s');
-      throw OfflineException('The Sidequest server at $baseUrl took too long to answer.');
+      throw OfflineException('The Sidequest server at $baseUrl took too long to answer.', true);
     } on http.ClientException catch (e) {
       // Includes SocketException on mobile/desktop: no network, or nothing listening at baseUrl.
       debugPrint('Sidequest API: $method $baseUrl$path failed: $e');

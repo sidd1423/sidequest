@@ -61,10 +61,14 @@ class GemmaClient:
         # Optional: "low" asks reasoning models to think less (faster). Dropped
         # automatically if the server doesn't support it.
         self.reasoning_effort = os.getenv("GEMMA_REASONING_EFFORT", "").strip() or None
+        # Stats for the last complete() call (backend/observability.py records them):
+        # seconds, http_status, finish_reason, input/output/reasoning/total tokens.
+        self.last_call: dict[str, Any] = {}
 
     def complete(self, prompt: str, *, temperature: float = 0.9) -> str:
         # Gemma has no separate system role on some hosts (e.g. Google AI Studio),
         # so all instructions go in a single user message.
+        self.last_call = {"seconds": 0.0, "max_tokens": self.max_tokens, "reasoning_effort": self.reasoning_effort}
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -104,7 +108,10 @@ class GemmaClient:
             raise LLMError(f"Unexpected response shape from inference API: {resp.text[:300]}") from exc
 
         finish = choice.get("finish_reason")
-        log.info("model=%s finish_reason=%s chars=%d", self.model, finish, len(content))
+        self.last_call["finish_reason"] = finish
+        self.last_call.update(usage_from(resp))
+        log.info("model=%s finish_reason=%s chars=%d tokens in/out=%s/%s", self.model, finish, len(content),
+                 self.last_call.get("input_tokens"), self.last_call.get("output_tokens"))
         log.debug("raw model output: %s", content[:2000])
         if not content.strip():
             hint = " (hit the token limit - raise GEMMA_MAX_TOKENS)" if finish == "length" else ""
@@ -119,14 +126,36 @@ class GemmaClient:
                 timeout=(CONNECT_TIMEOUT, self.timeout),
             )
         except requests.Timeout as exc:
+            self.last_call["seconds"] = self.last_call.get("seconds", 0.0) + time.monotonic() - started
+            self.last_call["timed_out_after"] = self.timeout
             raise LLMTimeout(
                 f"Gemma didn't answer within {self.timeout:.0f}s - the inference API is probably busy. "
                 "Try again, or raise GEMMA_TIMEOUT in .env"
             ) from exc
         except requests.RequestException as exc:
+            self.last_call["seconds"] = self.last_call.get("seconds", 0.0) + time.monotonic() - started
             raise LLMError(f"Can't reach the inference API at {self.base_url}: {exc}") from exc
+        self.last_call["seconds"] = self.last_call.get("seconds", 0.0) + time.monotonic() - started
+        self.last_call["http_status"] = resp.status_code
         log.info("inference API answered in %.1fs (HTTP %s)", time.monotonic() - started, resp.status_code)
         return resp
+
+
+def usage_from(resp: requests.Response) -> dict[str, int]:
+    """Token counts from an OpenAI-style `usage` block (missing on some servers)."""
+    try:
+        usage = resp.json().get("usage") or {}
+    except (ValueError, AttributeError):
+        return {}
+    out = {}
+    for key, name in (("prompt_tokens", "input_tokens"), ("completion_tokens", "output_tokens"),
+                      ("total_tokens", "total_tokens")):
+        if isinstance(usage.get(key), (int, float)):
+            out[name] = int(usage[key])
+    details = usage.get("completion_tokens_details") or {}
+    if isinstance(details, dict) and isinstance(details.get("reasoning_tokens"), (int, float)):
+        out["reasoning_tokens"] = int(details["reasoning_tokens"])  # Gemma "thinking"
+    return out
 
 
 def _text(content: Any) -> str:

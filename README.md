@@ -240,6 +240,38 @@ Setting `TIGER_DATABASE_URL` switches retrieval to Tiger Data instead.
 
 Table: `quests(id, quest_text, category, duration_minutes, difficulty, tags text[], embedding vector(768), created_at)`
 
+## Monitoring with Sentry (optional)
+
+`backend/observability.py` sends errors, request traces and a record of every
+Gemma call to [Sentry](https://sentry.io) - useful for the slow/timed-out Gemma
+answers. Create a Python (FastAPI) project in Sentry, then add to `.env`:
+
+```
+SENTRY_DSN=https://...@o123.ingest.sentry.io/456
+SENTRY_ENVIRONMENT=development        # or production
+SENTRY_TRACES_SAMPLE_RATE=1.0         # optional (default 1.0)
+SENTRY_SEND_PROMPTS=false             # true = attach prompts/answers to spans (contain preferences + location)
+```
+
+What shows up (nothing is sent without `SENTRY_DSN`):
+
+- **Traces / AI insights**: each `POST /users/{id}/quests` -> `quest.generate` span ->
+  one `gen_ai.chat` span per Gemma attempt with duration, input/output/reasoning
+  tokens, finish reason, outcome (`ok`, `rejected`, `timeout`, `error`) and why it
+  was rejected (`invalid_json`, `too_long`, `too_short`, `indoor`, `repeat`,
+  `similar_to_disliked`, `taste_conflict`). Weather/places/SerpApi calls appear as
+  HTTP spans in the same trace.
+- **Issues**: one event per quest that couldn't be generated (`quest-generation-failed`,
+  grouped by `failed` / `timeout`) with every attempt in the `quest_generation`
+  context; plus any unhandled error.
+- **Metrics**: `gemma.call.duration`, `gemma.tokens.input|output|reasoning`,
+  `gemma.attempts`, `gemma.rejections` (by `reason`), `gemma.timeouts`,
+  `quest.generate.duration`.
+- Only the account id is attached as the user (no emails, IPs or headers).
+
+The backend log prints the same per-attempt line even without Sentry:
+`gemma attempt 2: rejected in 41.3s (tokens in/out/reasoning 2900/1650/1200; rejected for indoor)`.
+
 ## Run
 
 Two terminals (activate the venv in each):

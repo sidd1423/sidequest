@@ -17,6 +17,7 @@ dependencies:
   geolocator: ^14.0.2              # location for weather/nearby places + route tracking
   flutter_map: ^8.2.1              # route map (OpenStreetMap tiles, no API key)
   latlong2: ^0.9.1                 # coordinates for flutter_map
+  sentry_flutter: ^9.0.0           # crash + error reports (only when built with --dart-define=SENTRY_DSN=...)
 
 dev_dependencies:
   flutter_test:

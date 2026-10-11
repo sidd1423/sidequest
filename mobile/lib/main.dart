@@ -13,13 +13,28 @@ import 'screens/history/quest_detail_screen.dart';
 import 'screens/home_shell.dart';
 import 'screens/streak/streak_celebration_screen.dart';
 import 'screens/streak/streak_screen.dart';
+import 'monitoring.dart';
 import 'theme.dart';
 
-Future<void> main() async {
+/// Sentry (crash reports) starts first when built with --dart-define=SENTRY_DSN=...;
+/// see lib/monitoring.dart.
+Future<void> main() => Monitoring.run(_start);
+
+Future<void> _start() async {
   WidgetsFlutterBinding.ensureInitialized();
   final store = await SharedPrefsStore.open();
-  final state = AppState(api: ApiClient(), cache: store, secure: store);
+  final state = AppState(api: ApiClient(httpClient: Monitoring.httpClient()), cache: store, secure: store);
   await state.restore(); // local only - opens straight into the app when logged in, even offline
+  // Reports carry the account id (only) of whoever is logged in.
+  String? reportedUser;
+  void trackUser() {
+    final id = state.account?.id;
+    if (id == reportedUser) return;
+    reportedUser = id;
+    Monitoring.setUser(id);
+  }
+  trackUser();
+  state.addListener(trackUser);
   runApp(SidequestApp(state: state));
   state.sync(); // in the background: send queued changes, pull the latest
 }
@@ -70,6 +85,7 @@ class SidequestApp extends StatelessWidget {
         title: 'Sidequest',
         debugShowCheckedModeBanner: false,
         theme: buildSidequestTheme(),
+        navigatorObservers: Monitoring.navigatorObservers,
         initialRoute: state.isLoggedIn
             ? AppRoutes.afterLogin(state)
             : AppRoutes.login,

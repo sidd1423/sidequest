@@ -5,13 +5,14 @@
 # Runs on the FREE instance. A free server has no disk: its files vanish on
 # every deploy, restart and spin-down (after ~15 idle minutes). So the SQLite
 # databases (accounts, quests, photos, library, history) are backed up
-# continuously to a Cloudflare R2 bucket by Litestream (litestream.yml) and
+# continuously to a Backblaze B2 bucket (10 GB free, no credit card) by
+# Litestream (litestream.yml) and
 # restored on every start - see scripts/start.sh.
 #
 # Upgrading later: set `plan: 0.5c-512mb` ($7/mo), add
 #   disk: {name: sidequest-data, mountPath: /var/data, sizeGB: 1}
 # and point the three *_PATH variables at /var/data/... . Keep the LITESTREAM_*
-# variables and R2 stays an off-site backup.
+# variables and the bucket stays an off-site backup.
 #
 # Only ever run ONE instance: two copies would overwrite each other's backups.
 services:
@@ -29,7 +30,7 @@ services:
       - key: PYTHON_VERSION
         value: 3.12.7
 
-      # --- Storage (local files, restored from R2 on every start) ---
+      # --- Storage (local files, restored from the bucket on every start) ---
       - key: DATABASE_PATH
         value: data/sidequest.db
       - key: LIBRARY_PATH
@@ -37,14 +38,14 @@ services:
       - key: HISTORY_PATH
         value: data/user_history.db
 
-      # --- Litestream -> Cloudflare R2 (R2 > Manage API tokens, "Object Read & Write") ---
-      - key: LITESTREAM_BUCKET            # bucket name, e.g. sidequest-backups
+      # --- Litestream -> Backblaze B2 (Application Keys > Add a New Application Key) ---
+      - key: LITESTREAM_BUCKET            # bucket name, e.g. sidequest-backups-gowtham
         sync: false
-      - key: LITESTREAM_ENDPOINT          # https://<account-id>.r2.cloudflarestorage.com
+      - key: LITESTREAM_ENDPOINT          # bucket's S3 endpoint, e.g. https://s3.us-east-005.backblazeb2.com
         sync: false
-      - key: LITESTREAM_ACCESS_KEY_ID
+      - key: LITESTREAM_ACCESS_KEY_ID     # B2 "keyID"
         sync: false
-      - key: LITESTREAM_SECRET_ACCESS_KEY
+      - key: LITESTREAM_SECRET_ACCESS_KEY # B2 "applicationKey" (shown once)
         sync: false
 
       # --- Accounts ---

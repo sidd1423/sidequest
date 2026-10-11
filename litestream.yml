@@ -1,6 +1,6 @@
 # Litestream: continuous backup of the three SQLite databases to an
-# S3-compatible bucket (Cloudflare R2). Used by scripts/start.sh only when
-# LITESTREAM_BUCKET is set; every ${VAR} comes from the environment
+# S3-compatible bucket (Backblaze B2; Cloudflare R2 etc. work too).
+# Used by scripts/start.sh only when LITESTREAM_BUCKET is set; every ${VAR} comes from the environment
 # (start.sh fills in the defaults).
 dbs:
   - path: ${DATABASE_PATH}

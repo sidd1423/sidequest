@@ -2,7 +2,7 @@
 # Starts the Sidequest API. Used as Render's start command (see render.yaml).
 #
 # With LITESTREAM_BUCKET set, the SQLite databases are continuously backed up to
-# an S3-compatible bucket (Cloudflare R2) by Litestream:
+# an S3-compatible bucket (Backblaze B2, Cloudflare R2, ...) by Litestream:
 #   1. restore each database from the bucket (skipped if there's no backup yet)
 #   2. run uvicorn under `litestream replicate`, which uploads every change
 #      within ~1 second and does a final sync when Render stops the server.
@@ -21,9 +21,14 @@ fi
 export DATABASE_PATH="${DATABASE_PATH:-data/sidequest.db}"
 export LIBRARY_PATH="${LIBRARY_PATH:-data/quest_library.db}"
 export HISTORY_PATH="${HISTORY_PATH:-data/user_history.db}"
+# Region: Backblaze B2 needs the bucket's region, which is part of its endpoint
+# (https://s3.us-east-005.backblazeb2.com -> us-east-005). R2 and others: "auto".
+if [ -z "${LITESTREAM_REGION:-}" ] && [[ "${LITESTREAM_ENDPOINT:-}" =~ s3\.([a-z0-9-]+)\.backblazeb2\.com ]]; then
+  LITESTREAM_REGION="${BASH_REMATCH[1]}"
+fi
 export LITESTREAM_REGION="${LITESTREAM_REGION:-auto}"
 export LITESTREAM_PREFIX="${LITESTREAM_PREFIX:-sidequest}"
-: "${LITESTREAM_ENDPOINT:?set LITESTREAM_ENDPOINT, e.g. https://<account-id>.r2.cloudflarestorage.com}"
+: "${LITESTREAM_ENDPOINT:?set LITESTREAM_ENDPOINT, e.g. https://s3.us-east-005.backblazeb2.com}"
 : "${LITESTREAM_ACCESS_KEY_ID:?set LITESTREAM_ACCESS_KEY_ID}"
 : "${LITESTREAM_SECRET_ACCESS_KEY:?set LITESTREAM_SECRET_ACCESS_KEY}"
 

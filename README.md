@@ -288,19 +288,25 @@ streamlit run app.py                  # UI on http://localhost:8501
 
 A free server has no disk - its files vanish on every deploy, restart and
 spin-down (~15 idle minutes). So the SQLite databases (accounts, quests, photos,
-library, history) are continuously backed up to a **Cloudflare R2** bucket with
+library, history) are continuously backed up to a **Backblaze B2** bucket with
 [Litestream](https://litestream.io) (`litestream.yml`) and restored on every
-start (`scripts/start.sh`). Changes reach R2 within ~1 second, and a final sync
+start (`scripts/start.sh`). Changes reach the bucket within ~1 second, and a final sync
 runs when Render stops the server.
 
-1. **Cloudflare R2** (free up to 10 GB): create a bucket (e.g.
-   `sidequest-backups`), then *R2 > Manage API tokens > Create API token* with
-   **Object Read & Write** on that bucket. Note the Access Key ID, the Secret
-   Access Key and the endpoint `https://<account-id>.r2.cloudflarestorage.com`.
+1. **Backblaze B2** (10 GB free, no credit card): sign up, then
+   *Buckets > Create a Bucket* - a globally unique name (e.g.
+   `sidequest-backups-<you>`), **Private**, encryption on. In the bucket's
+   *Lifecycle Settings* pick **Keep only the last version of the file** (otherwise
+   files Litestream deletes are kept as old versions and storage keeps growing).
+   Note the bucket's **Endpoint** (e.g. `s3.us-east-005.backblazeb2.com`).
+   Then *Application Keys > Add a New Application Key*: access to that bucket
+   only, **Read and Write**. Copy the `keyID` and `applicationKey` (shown once).
+   (Cloudflare R2 or any S3-compatible store works too - same four variables.)
 2. Push to GitHub, then in Render: **New -> Blueprint** -> pick this repo.
-3. Fill in the secrets it asks for: `GEMMA_API_KEY`, `LITESTREAM_BUCKET`,
-   `LITESTREAM_ENDPOINT`, `LITESTREAM_ACCESS_KEY_ID`,
-   `LITESTREAM_SECRET_ACCESS_KEY`, `NOMINATIM_EMAIL` (your email), and
+3. Fill in the secrets it asks for: `GEMMA_API_KEY`, `LITESTREAM_BUCKET`
+   (bucket name), `LITESTREAM_ENDPOINT` (`https://` + the bucket endpoint),
+   `LITESTREAM_ACCESS_KEY_ID` (keyID), `LITESTREAM_SECRET_ACCESS_KEY`
+   (applicationKey), `NOMINATIM_EMAIL` (your email), and
    optionally `SERPAPI_API_KEY`, `SENTRY_DSN`, `TIGER_DATABASE_URL`,
    `CORS_ORIGINS` (only for the Flutter web build).
 4. Wait for the deploy, then open `https://<service>.onrender.com/health`.
@@ -316,7 +322,7 @@ Notes
   starts empty and seeds the quest library.
 - Without `LITESTREAM_BUCKET`, `scripts/start.sh` just runs uvicorn.
 - Upgrading: see the comment at the top of `render.yaml` (paid instance + disk,
-  R2 stays as an off-site backup).
+  the bucket stays as an off-site backup).
 
 ## Test
 

@@ -284,22 +284,39 @@ streamlit run app.py                  # UI on http://localhost:8501
 ## Deploy to Render
 
 `render.yaml` is a Render Blueprint for the API (backend only; installs
-`requirements-server.txt`, Python 3.12.7).
+`requirements-server.txt`, Python 3.12.7) on Render's **free** instance.
 
-1. Push to GitHub, then in Render: **New -> Blueprint** -> pick this repo.
-2. Fill in the secrets it asks for: `GEMMA_API_KEY` (required), `NOMINATIM_EMAIL`
-   (your email), and optionally `SERPAPI_API_KEY`, `SENTRY_DSN`,
-   `TIGER_DATABASE_URL`, `CORS_ORIGINS` (only for the Flutter web build).
-3. Wait for the deploy, then open `https://<service>.onrender.com/health`.
-4. Point the clients at it:
+A free server has no disk - its files vanish on every deploy, restart and
+spin-down (~15 idle minutes). So the SQLite databases (accounts, quests, photos,
+library, history) are continuously backed up to a **Cloudflare R2** bucket with
+[Litestream](https://litestream.io) (`litestream.yml`) and restored on every
+start (`scripts/start.sh`). Changes reach R2 within ~1 second, and a final sync
+runs when Render stops the server.
+
+1. **Cloudflare R2** (free up to 10 GB): create a bucket (e.g.
+   `sidequest-backups`), then *R2 > Manage API tokens > Create API token* with
+   **Object Read & Write** on that bucket. Note the Access Key ID, the Secret
+   Access Key and the endpoint `https://<account-id>.r2.cloudflarestorage.com`.
+2. Push to GitHub, then in Render: **New -> Blueprint** -> pick this repo.
+3. Fill in the secrets it asks for: `GEMMA_API_KEY`, `LITESTREAM_BUCKET`,
+   `LITESTREAM_ENDPOINT`, `LITESTREAM_ACCESS_KEY_ID`,
+   `LITESTREAM_SECRET_ACCESS_KEY`, `NOMINATIM_EMAIL` (your email), and
+   optionally `SERPAPI_API_KEY`, `SENTRY_DSN`, `TIGER_DATABASE_URL`,
+   `CORS_ORIGINS` (only for the Flutter web build).
+4. Wait for the deploy, then open `https://<service>.onrender.com/health`.
+5. Point the clients at it:
    `flutter run --dart-define=API_BASE_URL=https://<service>.onrender.com`
    and `BACKEND_URL=https://<service>.onrender.com` for Streamlit.
 
-All SQLite databases (accounts, quests, photos, library, history) live on a 1 GB
-persistent disk at `/var/data`, which needs the paid Starter plan. On the free
-plan (`plan: free`, no `disk:` block, no `*_PATH` vars) the data is wiped on
-every deploy and the server sleeps after ~15 idle minutes. Your local `.db`
-files are not uploaded - the server starts empty and seeds the quest library.
+Notes
+- If the bucket can't be reached at start-up the server refuses to start (so an
+  empty database never replaces your backups) - check the `LITESTREAM_*` values
+  in the Render logs.
+- Run only ONE instance. Your local `.db` files are not uploaded; the server
+  starts empty and seeds the quest library.
+- Without `LITESTREAM_BUCKET`, `scripts/start.sh` just runs uvicorn.
+- Upgrading: see the comment at the top of `render.yaml` (paid instance + disk,
+  R2 stays as an off-site backup).
 
 ## Test
 

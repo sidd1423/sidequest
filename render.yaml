@@ -2,37 +2,50 @@
 # Render dashboard -> New -> Blueprint -> pick this repo. Render asks for every
 # value marked `sync: false` (your secrets) when you create it.
 #
-# The SQLite databases (accounts, quests, photos, library, history) live on the
-# persistent disk at /var/data. A disk needs a paid instance (plan: 0.5c-512mb = Starter).
-# To try it on the free plan instead: set `plan: free` and delete the `disk:`
-# block and the three *_PATH variables - but then all data is wiped on every
-# deploy/restart and the server sleeps after ~15 idle minutes.
+# Runs on the FREE instance. A free server has no disk: its files vanish on
+# every deploy, restart and spin-down (after ~15 idle minutes). So the SQLite
+# databases (accounts, quests, photos, library, history) are backed up
+# continuously to a Cloudflare R2 bucket by Litestream (litestream.yml) and
+# restored on every start - see scripts/start.sh.
+#
+# Upgrading later: set `plan: 0.5c-512mb` ($7/mo), add
+#   disk: {name: sidequest-data, mountPath: /var/data, sizeGB: 1}
+# and point the three *_PATH variables at /var/data/... . Keep the LITESTREAM_*
+# variables and R2 stays an off-site backup.
+#
+# Only ever run ONE instance: two copies would overwrite each other's backups.
 services:
   - type: web
     name: sidequest-api
     runtime: python
-    plan: 0.5c-512mb   # "Starter": 0.5 CPU, 512 MB, $7/mo (enough: the app peaks ~140 MB)
+    plan: free
     region: ohio
     branch: main
     autoDeploy: true
-    buildCommand: pip install -r requirements-server.txt
-    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips="*"
+    buildCommand: pip install -r requirements-server.txt && bash scripts/install_litestream.sh
+    startCommand: bash scripts/start.sh
     healthCheckPath: /health
-    disk:
-      name: sidequest-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.7
 
-      # --- Storage (on the persistent disk) ---
+      # --- Storage (local files, restored from R2 on every start) ---
       - key: DATABASE_PATH
-        value: /var/data/sidequest.db
+        value: data/sidequest.db
       - key: LIBRARY_PATH
-        value: /var/data/quest_library.db
+        value: data/quest_library.db
       - key: HISTORY_PATH
-        value: /var/data/user_history.db
+        value: data/user_history.db
+
+      # --- Litestream -> Cloudflare R2 (R2 > Manage API tokens, "Object Read & Write") ---
+      - key: LITESTREAM_BUCKET            # bucket name, e.g. sidequest-backups
+        sync: false
+      - key: LITESTREAM_ENDPOINT          # https://<account-id>.r2.cloudflarestorage.com
+        sync: false
+      - key: LITESTREAM_ACCESS_KEY_ID
+        sync: false
+      - key: LITESTREAM_SECRET_ACCESS_KEY
+        sync: false
 
       # --- Accounts ---
       - key: AUTH_REQUIRED

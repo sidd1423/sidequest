@@ -27,3 +27,6 @@ Thumbs.db
 
 # Test fixture database (committed on purpose)
 !tests/fixtures/*.db
+
+# Litestream binary (downloaded by scripts/install_litestream.sh)
+bin/

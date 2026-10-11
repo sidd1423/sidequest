@@ -15,6 +15,7 @@ abstract final class AppRoutes {
 
   // Detail screens pushed from a tab
   static const questDetail = '/quest-detail';
+  static const questRun = '/quest-run'; // doing a quest step by step (arg: quest id)
   static const editAccount = '/account/edit';
   static const streak = '/streak';
   static const streakCelebration = '/streak/celebrate'; // after the day's first completed quest

@@ -5,15 +5,12 @@ import '../../data/app_scope.dart';
 import '../../monitoring.dart';
 import '../../models/generated_quest.dart';
 import '../../models/preference_options.dart';
-import '../../widgets/quest_journal.dart';
-import '../../widgets/route_tracker.dart';
+import '../../widgets/quest_run_widgets.dart';
 import '../../widgets/streak_widgets.dart';
 import '../../widgets/where_you_are_card.dart';
 import '../auth/auth_scaffold.dart' show AuthError;
-import '../streak/streak_celebration_screen.dart';
 import 'quest_card.dart';
 import 'party_section.dart';
-import 'quest_feedback_form.dart';
 
 /// Quest tab (home).
 ///
@@ -21,9 +18,11 @@ import 'quest_feedback_form.dart';
 ///    energy, distance.
 /// 2. Tap Generate - only then does the quest card appear (it stays across
 ///    app restarts until you finish it).
-/// 3. Add notes / photos while you're out, then rate it ("How did it go?").
-///    A completed quest leaves this screen (it's in History) and the
-///    "quests completed" counter at the top goes up.
+/// 3. Tap "Start quest" (QuestRunScreen): a timer starts, the steps show one
+///    at a time with a photo button each, and your route is drawn on an
+///    OpenStreetMap map. Finish (last step) or give up, flick through the
+///    photo album, then rate it. A completed quest leaves this screen (it's
+///    in History) and the "quests completed" counter at the top goes up.
 ///
 /// Interests and accessibility come from the profile (set at sign-up / Edit
 /// account). Where you are, the weather and real places nearby come from
@@ -99,25 +98,6 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
         Scrollable.ensureVisible(cardContext, duration: const Duration(milliseconds: 300));
       }
     });
-  }
-
-  Future<void> _submitFeedback(QuestFeedback feedback) async {
-    final state = AppScope.read(context);
-    final messenger = ScaffoldMessenger.of(context);
-    final quest = state.activeQuest;
-    if (quest == null) return;
-    final wasExtended = state.streak.extendedToday;
-    await state.sendFeedback(quest.id, feedback); // saved on the device; sent now or when online
-    final synced = state.isOnline ? '' : " It'll sync when you're back online.";
-    final message = feedback.completed
-        ? 'Quest complete! That\'s ${state.completedCount} so far - it\'s in History now.$synced'
-        : 'Thanks! Your next quest will take this into account.$synced';
-    // First completed quest today: "N day streak!" - before the snackbar, so the
-    // snackbar doesn't cover the celebration's Continue button.
-    if (mounted && feedback.completed) await StreakCelebrationScreen.showIfExtended(context, wasExtended: wasExtended);
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -242,26 +222,19 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
           // --- Result: only after Generate ------------------------------
           if (record != null && quest != null) ...[
             const SizedBox(height: 24),
-            QuestCard(key: _cardKey, quest: quest, party: record.party, conditions: record.conditions),
-            const SizedBox(height: 16),
-            RouteTracker(
-              key: ValueKey('route_${record.id}'),
-              questId: record.id,
-              canTrack: true,
-              places: record.conditions?.nearby ?? const [],
+            QuestCard(
+              key: _cardKey,
+              quest: quest,
+              party: record.party,
+              conditions: record.conditions,
+              showSteps: false, // revealed one at a time once started
             ),
-            const SizedBox(height: 16),
-            QuestJournal(key: ValueKey('journal_${record.id}'), questId: record.id),
-            const SizedBox(height: 16),
-            if (feedback == null)
-              QuestFeedbackForm(
-                // New key per quest so the form resets for each one.
-                key: ValueKey('feedback_form_${record.id}'),
-                estimatedMinutes: quest.minutes,
-                onSubmit: _submitFeedback,
-              )
-            else
+            const SizedBox(height: 12),
+            if (feedback != null && state.runFor(record.id) == null) ...[
               _FeedbackSummary(feedback: feedback, pending: record.feedbackPending),
+              const SizedBox(height: 12),
+            ],
+            QuestStartButton(key: ValueKey('start_${record.id}'), record: record),
           ],
         ],
       ),

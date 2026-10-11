@@ -8,7 +8,7 @@ import 'party_section.dart' show PartyMembers;
 
 /// The generated quest: title, summary, quick facts, steps and notes.
 class QuestCard extends StatelessWidget {
-  const QuestCard({super.key, required this.quest, this.party, this.conditions});
+  const QuestCard({super.key, required this.quest, this.party, this.conditions, this.showSteps = true});
 
   final GeneratedQuest quest;
 
@@ -17,6 +17,9 @@ class QuestCard extends StatelessWidget {
 
   /// Place + weather when it was generated (null if location was off).
   final QuestConditions? conditions;
+
+  /// false before the quest is started: steps are revealed one at a time.
+  final bool showSteps;
 
   @override
   Widget build(BuildContext context) {
@@ -80,14 +83,30 @@ class QuestCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 16),
-            Text('Steps', style: theme.textTheme.titleSmall),
-            const SizedBox(height: 4),
-            for (var i = 0; i < quest.steps.length; i++)
-              ListTile(
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                leading: CircleAvatar(radius: 14, child: Text('${i + 1}')),
-                title: Text(quest.steps[i]),
+            if (showSteps) ...[
+              Text('Steps', style: theme.textTheme.titleSmall),
+              const SizedBox(height: 4),
+              for (var i = 0; i < quest.steps.length; i++)
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: CircleAvatar(radius: 14, child: Text('${i + 1}')),
+                  title: Text(quest.steps[i]),
+                ),
+            ] else
+              Row(
+                key: const Key('steps_hidden'),
+                children: [
+                  Icon(Icons.lock_outline, size: 20, color: theme.colorScheme.onSurfaceVariant),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '${quest.steps.length} ${quest.steps.length == 1 ? 'step' : 'steps'} - '
+                      "you'll see them one at a time once you start.",
+                      style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    ),
+                  ),
+                ],
               ),
             if (quest.accessibilityNotes.isNotEmpty) _Note(icon: Icons.accessible, text: quest.accessibilityNotes),
             if (quest.weatherBackup.isNotEmpty) _Note(icon: Icons.umbrella_outlined, text: quest.weatherBackup),

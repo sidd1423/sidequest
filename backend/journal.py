@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS quest_logs (
     text        TEXT NOT NULL DEFAULT '',
     image       BLOB,
     mime        TEXT,
+    step        INTEGER,
     created_at  TEXT NOT NULL,
     UNIQUE (user_id, client_id)
 );
@@ -43,6 +44,9 @@ ALLOWED_MIME = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/gi
 def init_journal() -> None:
     with db.connect() as conn:
         conn.executescript(SCHEMA)
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(quest_logs)")}
+        if "step" not in columns:  # added with the step-by-step quest mode
+            conn.execute("ALTER TABLE quest_logs ADD COLUMN step INTEGER")
 
 
 class LogIn(BaseModel):
@@ -56,6 +60,7 @@ class LogIn(BaseModel):
     image_base64: str | None = None
     mime: str | None = None
     created_at: datetime | None = None  # when it was written on the device (may be offline, earlier)
+    step: int | None = Field(None, ge=1, le=100)  # quest step it was taken at (1-based), for the album
 
     @model_validator(mode="after")
     def _check(self) -> "LogIn":
@@ -77,17 +82,18 @@ class LogOut(BaseModel):
     text: str
     has_photo: bool
     mime: str | None = None
+    step: int | None = None
     created_at: datetime
 
 
 def _row(r: sqlite3.Row) -> LogOut:
     return LogOut(
         id=r["id"], quest_id=r["quest_id"], client_id=r["client_id"], kind=r["kind"], text=r["text"],
-        has_photo=r["has_photo"] == 1, mime=r["mime"], created_at=r["created_at"],
+        has_photo=r["has_photo"] == 1, mime=r["mime"], step=r["step"], created_at=r["created_at"],
     )
 
 
-_COLUMNS = "id, quest_id, client_id, kind, text, mime, created_at, image IS NOT NULL AS has_photo"
+_COLUMNS = "id, quest_id, client_id, kind, text, mime, step, created_at, image IS NOT NULL AS has_photo"
 
 
 def _quest_belongs(conn: sqlite3.Connection, user_id: str, quest_id: int) -> None:
@@ -108,10 +114,11 @@ def add(user_id: str, quest_id: int, entry: LogIn) -> LogOut:
     with db.connect() as conn:
         _quest_belongs(conn, user_id, quest_id)
         conn.execute(
-            """INSERT INTO quest_logs (user_id, quest_id, client_id, kind, text, image, mime, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO quest_logs (user_id, quest_id, client_id, kind, text, image, mime, step, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT (user_id, client_id) DO UPDATE SET text = excluded.text""",
-            (user_id, quest_id, entry.client_id, entry.kind, entry.text.strip(), image, entry.mime, created),
+            (user_id, quest_id, entry.client_id, entry.kind, entry.text.strip(), image, entry.mime, entry.step,
+             created),
         )
         row = conn.execute(
             f"SELECT {_COLUMNS} FROM quest_logs WHERE user_id = ? AND client_id = ?", (user_id, entry.client_id)

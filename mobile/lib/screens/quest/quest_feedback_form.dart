@@ -7,20 +7,32 @@ import '../../models/generated_quest.dart';
 /// Completed it / Didn't finish, 1-5 stars (required if completed, optional
 /// if not), time spent (defaults to the estimate, or 0 if not finished) and
 /// an optional comment. Mirrors the backend's feedback fields.
+///
+/// After a timed quest ([timeSpentMinutes] from the timer) the time starts
+/// at what was measured and doesn't change with the outcome.
 class QuestFeedbackForm extends StatefulWidget {
-  const QuestFeedbackForm({super.key, required this.estimatedMinutes, required this.onSubmit});
+  const QuestFeedbackForm({
+    super.key,
+    required this.estimatedMinutes,
+    required this.onSubmit,
+    this.initialCompleted = true,
+    this.timeSpentMinutes,
+  });
 
   final int estimatedMinutes;
   final ValueChanged<QuestFeedback> onSubmit;
+  final bool initialCompleted;
+  final int? timeSpentMinutes;
 
   @override
   State<QuestFeedbackForm> createState() => _QuestFeedbackFormState();
 }
 
 class _QuestFeedbackFormState extends State<QuestFeedbackForm> {
-  bool _completed = true;
+  late bool _completed = widget.initialCompleted;
   int? _rating;
-  late final _timeController = TextEditingController(text: '${widget.estimatedMinutes}');
+  late final _timeController = TextEditingController(
+      text: '${widget.timeSpentMinutes ?? (widget.initialCompleted ? widget.estimatedMinutes : 0)}');
   final _commentController = TextEditingController();
 
   @override
@@ -33,8 +45,8 @@ class _QuestFeedbackFormState extends State<QuestFeedbackForm> {
   void _setCompleted(bool completed) {
     setState(() {
       _completed = completed;
-      // Time defaults to the estimate when done, 0 when not finished.
-      _timeController.text = completed ? '${widget.estimatedMinutes}' : '0';
+      // Time defaults to the estimate when done, 0 when not finished (unless it was timed).
+      if (widget.timeSpentMinutes == null) _timeController.text = completed ? '${widget.estimatedMinutes}' : '0';
     });
   }
 
@@ -104,6 +116,7 @@ class _QuestFeedbackFormState extends State<QuestFeedbackForm> {
               keyboardType: TextInputType.number,
               decoration: InputDecoration(
                 labelText: _completed ? 'Time spent (minutes)' : 'Time spent before stopping (minutes)',
+                helperText: widget.timeSpentMinutes == null ? null : 'From your quest timer',
               ),
             ),
             const SizedBox(height: 12),

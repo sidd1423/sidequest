@@ -12,6 +12,7 @@ import '../models/location.dart';
 import '../models/party.dart';
 import '../models/profile_preferences.dart';
 import '../models/quest_record.dart';
+import '../models/quest_run.dart';
 import '../models/rewards.dart';
 import '../models/streak.dart';
 import 'api_client.dart';
@@ -73,6 +74,7 @@ class AppState extends ChangeNotifier {
   List<Party> _parties = const [];
   Set<int> _seenPartyQuests = {}; // group quests already put on the Quest screen
   int? _activeQuestId;
+  QuestRun? _run; // the quest being done step by step (timer), if any
   Map<int, List<JournalEntry>> _journals = {};
   final Map<String, Uint8List> _photoCache = {}; // downloaded photos, by client id (memory only)
 
@@ -132,6 +134,13 @@ class AppState extends ChangeNotifier {
     final matches = _quests.where((q) => q.id == id && q.status != QuestStatus.completed);
     return matches.isEmpty ? null : matches.first; // completed (maybe on another device) = gone
   }
+
+  /// The quest being done step by step right now (or just finished / given
+  /// up and waiting for its rating). null = none started.
+  QuestRun? get questRun => _run;
+
+  /// [questRun] if it's for [questId].
+  QuestRun? runFor(int questId) => _run?.questId == questId ? _run : null;
 
   /// Notes and photos for a quest, oldest first.
   List<JournalEntry> journal(int questId) => List.unmodifiable(_journals[questId] ?? const <JournalEntry>[]);
@@ -200,6 +209,7 @@ class AppState extends ChangeNotifier {
       _outbox = [];
       _completedCount = 0;
       _activeQuestId = null;
+      _run = null;
       _journals = {};
       _rewards = null;
       _streak = null;
@@ -225,6 +235,8 @@ class AppState extends ChangeNotifier {
     final m = meta == null ? const <String, dynamic>{} : jsonDecode(meta) as Map<String, dynamic>;
     _completedCount = (m['completed'] as num?)?.toInt() ?? 0;
     _activeQuestId = (m['active_quest'] as num?)?.toInt();
+    final run = m['quest_run'];
+    _run = run is Map<String, dynamic> ? QuestRun.fromJson(run) : null;
     _seenPartyQuests = {for (final id in (m['party_seen'] as List<dynamic>? ?? const [])) (id as num).toInt()};
     final rewards = await _cache.read(_key('rewards'));
     _rewards = rewards == null ? null : Rewards.fromJson(jsonDecode(rewards) as Map<String, dynamic>);
@@ -265,6 +277,7 @@ class AppState extends ChangeNotifier {
       'meta:$id': jsonEncode({
         'completed': _completedCount,
         'active_quest': _activeQuestId,
+        if (_run != null) 'quest_run': _run!.toJson(),
         'party_seen': _seenPartyQuests.toList(),
       }),
       'journal:$id': jsonEncode([for (final list in _journals.values) for (final e in list) e.toJson()]),
@@ -350,6 +363,7 @@ class AppState extends ChangeNotifier {
     _outbox = [];
     _completedCount = 0;
     _activeQuestId = null;
+    _run = null;
     _journals = {};
     _rewards = null;
     _streak = null;
@@ -411,6 +425,7 @@ class AppState extends ChangeNotifier {
     if (!feedback.completed && wasCompleted && _completedCount > 0) _completedCount--;
     // A completed quest leaves the Quest screen (it's in History now).
     if (feedback.completed && _activeQuestId == questId) _activeQuestId = null;
+    if (_run?.questId == questId) _run = null; // rated - the step-by-step run is over
     _quests = [for (final q in _quests) q.id == questId ? q.withFeedback(feedback, pending: true) : q];
     await _saveCache();
     notifyListeners();
@@ -437,10 +452,64 @@ class AppState extends ChangeNotifier {
     final record = QuestRecord.fromJson(json as Map<String, dynamic>, distanceKm: settings.distanceKm);
     _quests = [record, ..._quests.where((q) => q.id != record.id)];
     _activeQuestId = record.id;
+    await _dropRunUnless(record.id); // a new quest replaces one that was in progress
     if (withWhere.location != null && record.conditions != null) _conditions = record.conditions; // freshest copy
     await _saveCache();
     notifyListeners();
     return record;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Doing a quest step by step (timer, one step at a time; works offline)
+  // ---------------------------------------------------------------------------
+
+  /// "Start quest": the timer starts, step 1 shows and the route starts
+  /// recording on the map. Starting again (e.g. after a "didn't finish")
+  /// begins a fresh run.
+  Future<void> startQuest(int questId) async {
+    final current = runFor(questId);
+    if (current != null && !current.ended) return; // already going
+    _run = QuestRun(questId: questId, startedAt: clock());
+    await _saveCache();
+    notifyListeners();
+    await startTracking(questId); // no GPS = the quest still runs, just without a map
+  }
+
+  /// Show step [step] (0-based) of the running quest.
+  Future<void> setQuestStep(int step) async {
+    final run = _run;
+    if (run == null || run.ended || step == run.step || step < 0) return;
+    _run = run.atStep(step);
+    await _saveCache();
+    notifyListeners();
+  }
+
+  /// "Finish quest" (on the last step) or "Give up": stops the timer and the
+  /// route. The rating is sent separately ([sendFeedback]).
+  Future<void> endQuest({required bool gaveUp}) async {
+    final run = _run;
+    if (run == null || run.ended) return;
+    _run = run.end(clock(), gaveUp: gaveUp);
+    if (isTracking(run.questId)) await stopTracking();
+    await _saveCache();
+    notifyListeners();
+  }
+
+  /// "Keep going" after finishing / giving up by mistake: back to the steps.
+  Future<void> resumeQuest() async {
+    final run = _run;
+    if (run == null || !run.ended) return;
+    _run = run.resumed();
+    await _saveCache();
+    notifyListeners();
+    await startTracking(run.questId);
+  }
+
+  Future<void> _dropRunUnless(int questId) async {
+    final run = _run;
+    if (run == null || run.questId == questId) return;
+    _run = null;
+    if (isTracking(run.questId)) await stopTracking();
   }
 
   // ---------------------------------------------------------------------------
@@ -553,7 +622,12 @@ class AppState extends ChangeNotifier {
     _stopListening();
     _trackSub = null;
     _unsavedPoints = 0;
-    _queueRouteUpload(questId);
+    if (_routes[questId]?.isNotEmpty ?? false) {
+      _queueRouteUpload(questId);
+    } else {
+      // Nothing recorded (e.g. no GPS): nothing to upload.
+      _outbox.removeWhere((op) => op['type'] == 'route' && op['quest_id'] == questId);
+    }
     await _saveCache();
     notifyListeners();
     unawaited(sync(refresh: false));
@@ -627,9 +701,10 @@ class AppState extends ChangeNotifier {
           createdAt: DateTime.now(), pending: true));
 
   /// [bytes] should already be resized (the picker does that); max 5 MB.
-  Future<void> addPhoto(int questId, Uint8List bytes, String mime, {String caption = ''}) =>
+  /// [step] (1-based): taken during that quest step, for the album.
+  Future<void> addPhoto(int questId, Uint8List bytes, String mime, {String caption = '', int? step}) =>
       _addEntry(JournalEntry(clientId: _newClientId(), questId: questId, kind: 'photo', text: caption.trim(),
-          mime: mime, localImageBase64: base64Encode(bytes), createdAt: DateTime.now(), pending: true));
+          mime: mime, localImageBase64: base64Encode(bytes), createdAt: DateTime.now(), pending: true, step: step));
 
   Future<void> _addEntry(JournalEntry entry) async {
     _journals.putIfAbsent(entry.questId, () => []).add(entry);

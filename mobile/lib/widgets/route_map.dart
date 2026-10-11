@@ -8,7 +8,14 @@ import '../models/location.dart';
 /// from the green start dot to the red end dot. [live]: keeps the newest
 /// point in view while tracking.
 class RouteMap extends StatefulWidget {
-  const RouteMap({super.key, required this.points, this.live = false, this.height = 240, this.places = const []});
+  const RouteMap({
+    super.key,
+    required this.points,
+    this.live = false,
+    this.height = 240,
+    this.places = const [],
+    this.center,
+  });
 
   final List<GeoPoint> points;
   final bool live;
@@ -16,6 +23,9 @@ class RouteMap extends StatefulWidget {
 
   /// Real spots near where the quest was made (pins), if known.
   final List<NearbyPlace> places;
+
+  /// Where to look before the first GPS point (e.g. where the quest was made).
+  final LatLng? center;
 
   /// Widget tests turn this off: no network tiles there.
   static bool tilesEnabled = true;
@@ -38,8 +48,9 @@ class _RouteMapState extends State<RouteMap> {
     super.didUpdateWidget(old);
     // Follow the walker while tracking.
     if (widget.live && _ready && widget.points.length != old.points.length && widget.points.isNotEmpty) {
+      final first = old.points.isEmpty; // first fix: zoom in on it
       final last = widget.points.last;
-      _controller.move(LatLng(last.lat, last.lon), _controller.camera.zoom);
+      _controller.move(LatLng(last.lat, last.lon), first ? 17 : _controller.camera.zoom);
     }
   }
 
@@ -65,8 +76,8 @@ class _RouteMapState extends State<RouteMap> {
       );
     }
     return MapOptions(
-      initialCenter: line.isNotEmpty ? line.last : const LatLng(0, 0),
-      initialZoom: line.isNotEmpty ? 17 : 2,
+      initialCenter: line.isNotEmpty ? line.last : (widget.center ?? const LatLng(0, 0)),
+      initialZoom: line.isNotEmpty ? 17 : (widget.center != null ? 15 : 2),
       interactionOptions: interaction,
       onMapReady: () => _ready = true,
     );

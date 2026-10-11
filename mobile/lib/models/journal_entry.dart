@@ -13,6 +13,7 @@ class JournalEntry {
     this.mime,
     this.localImageBase64,
     this.pending = false,
+    this.step,
   });
 
   /// Chosen on the device; the server uses it to ignore duplicate uploads.
@@ -30,6 +31,10 @@ class JournalEntry {
   final String? localImageBase64;
   final bool pending;
 
+  /// The quest step (1-based) a photo was taken at, for the album. null =
+  /// added from the quest log, not during a step.
+  final int? step;
+
   bool get isPhoto => kind == 'photo';
   Uint8List? get localImage => localImageBase64 == null ? null : base64Decode(localImageBase64!);
 
@@ -41,6 +46,7 @@ class JournalEntry {
         text: text,
         serverId: id,
         mime: mime,
+        step: step,
         // Bytes are dropped once uploaded (device storage is small, e.g. 5 MB
         // on web); the photo is downloaded from the server when needed.
       );
@@ -52,6 +58,7 @@ class JournalEntry {
         'text': text,
         if (isPhoto) 'image_base64': localImageBase64,
         if (isPhoto) 'mime': mime,
+        if (step != null) 'step': step,
         'created_at': createdAt.toUtc().toIso8601String(),
       };
 
@@ -64,6 +71,7 @@ class JournalEntry {
         createdAt: DateTime.tryParse(json['created_at'] as String? ?? '') ?? DateTime.now(),
         serverId: (json['id'] as num).toInt(),
         mime: json['mime'] as String?,
+        step: (json['step'] as num?)?.toInt(),
       );
 
   factory JournalEntry.fromJson(Map<String, dynamic> json) => JournalEntry(
@@ -76,6 +84,7 @@ class JournalEntry {
         mime: json['mime'] as String?,
         localImageBase64: json['local_image'] as String?,
         pending: (json['pending'] as bool?) ?? false,
+        step: (json['step'] as num?)?.toInt(),
       );
 
   /// For the on-device cache.
@@ -89,5 +98,6 @@ class JournalEntry {
         if (mime != null) 'mime': mime,
         if (localImageBase64 != null) 'local_image': localImageBase64,
         if (pending) 'pending': true,
+        if (step != null) 'step': step,
       };
 }

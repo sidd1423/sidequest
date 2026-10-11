@@ -281,6 +281,7 @@ class FakeBackend {
         'text': b['text'] ?? '',
         'mime': b['mime'],
         'image': b['image_base64'],
+        if (b['step'] != null) 'step': b['step'],
         'created_at': b['created_at'] ?? DateTime.now().toUtc().toIso8601String(),
       };
       mine.add(entry);

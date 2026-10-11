@@ -4,6 +4,7 @@ import '../../data/app_scope.dart';
 import '../../models/generated_quest.dart';
 import '../../models/quest_record.dart';
 import '../../widgets/quest_journal.dart';
+import '../../widgets/quest_run_widgets.dart';
 import '../../widgets/route_tracker.dart';
 import '../quest/quest_card.dart';
 import '../quest/quest_feedback_form.dart';
@@ -34,6 +35,27 @@ class QuestDetailScreen extends StatelessWidget {
               children: [
                 QuestCard(quest: record.quest, party: record.party, conditions: record.conditions),
                 const SizedBox(height: 16),
+                // Not done yet: do it now, step by step.
+                if (record.status != QuestStatus.completed) ...[
+                  QuestStartButton(record: record),
+                  const SizedBox(height: 16),
+                ],
+                if (albumPhotos(state.journal(record.id)).isNotEmpty) ...[
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text('Album', style: Theme.of(context).textTheme.titleMedium),
+                          const SizedBox(height: 8),
+                          QuestAlbum(questId: record.id, steps: record.quest.steps),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
                 // Not completed yet: you can still record the route from here.
                 RouteTracker(
                   questId: record.id,

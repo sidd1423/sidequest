@@ -6,7 +6,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import history, library
+from backend import db, history, journal, library
 from backend.main import app, get_llm, get_retriever
 from backend.quest_generator import build_prompt
 from backend.schemas import PreferencesIn, Quest
@@ -72,6 +72,31 @@ def test_notes_and_photos(api):
     assert api.delete(f"/users/{uid}/logs/note-0001", headers=h).status_code == 204
     assert api.delete(f"/users/{uid}/logs/note-0001", headers=h).status_code == 204  # idempotent
     assert len(api.get(f"/users/{uid}/quests/{qid}/logs", headers=h).json()) == 1
+
+
+def test_photo_step_tag_for_the_album(api):
+    uid, h, qid = account(api)
+    photo = {"client_id": "photo-step-2", "kind": "photo", "text": "", "step": 2,
+             "image_base64": base64.b64encode(PNG).decode(), "mime": "image/png"}
+    assert api.post(f"/users/{uid}/quests/{qid}/logs", headers=h, json=photo).json()["step"] == 2
+    note = {"client_id": "note-nostep", "kind": "note", "text": "no step"}
+    api.post(f"/users/{uid}/quests/{qid}/logs", headers=h, json=note)
+    logs = api.get(f"/users/{uid}/quests/{qid}/logs", headers=h).json()
+    assert [(l["client_id"], l["step"]) for l in logs] == [("photo-step-2", 2), ("note-nostep", None)]
+    bad = {**photo, "client_id": "photo-step-0", "step": 0}
+    assert api.post(f"/users/{uid}/quests/{qid}/logs", headers=h, json=bad).status_code == 422
+
+
+def test_journal_adds_step_column_to_old_tables():
+    with db.connect() as conn:
+        conn.execute("DROP TABLE IF EXISTS quest_logs")
+        conn.execute("""CREATE TABLE quest_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
+            quest_id INTEGER NOT NULL, client_id TEXT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL DEFAULT '',
+            image BLOB, mime TEXT, created_at TEXT NOT NULL, UNIQUE (user_id, client_id))""")
+    journal.init_journal()
+    journal.init_journal()  # idempotent
+    with db.connect() as conn:
+        assert "step" in {r["name"] for r in conn.execute("PRAGMA table_info(quest_logs)")}
 
 
 @pytest.mark.parametrize("bad", [

@@ -10,6 +10,7 @@ import 'screens/auth/login_screen.dart';
 import 'screens/auth/preferences_setup_screen.dart';
 import 'screens/auth/sign_up_screen.dart';
 import 'screens/history/quest_detail_screen.dart';
+import 'screens/quest/quest_run_screen.dart';
 import 'screens/home_shell.dart';
 import 'screens/streak/streak_celebration_screen.dart';
 import 'screens/streak/streak_screen.dart';
@@ -103,6 +104,12 @@ class SidequestApp extends StatelessWidget {
             return MaterialPageRoute<void>(
               settings: settings,
               builder: (_) => QuestDetailScreen(questId: questId),
+            );
+          }
+          if (settings.name == AppRoutes.questRun && questId is int) {
+            return MaterialPageRoute<void>(
+              settings: settings,
+              builder: (_) => QuestRunScreen(questId: questId),
             );
           }
           return null;

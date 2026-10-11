@@ -108,6 +108,35 @@ Future<void> continuePastStreak(WidgetTester tester) async {
   expect(find.byKey(const Key('streak_celebration')), findsNothing);
 }
 
+/// Quest tab -> "Start quest": the step-by-step screen (timer, map) opens.
+Future<void> startQuest(WidgetTester tester) async {
+  await tapAndSettle(tester, find.byKey(const Key('start_quest_button')));
+  expect(find.byKey(const Key('quest_run_screen')), findsOneWidget);
+}
+
+/// On the step-by-step screen: "Next step" until the last one, then "Finish
+/// quest". Leaves the album + rating form on screen.
+Future<void> stepToEnd(WidgetTester tester) async {
+  while (find.byKey(const Key('run_next')).evaluate().isNotEmpty) {
+    await tapAndSettle(tester, find.byKey(const Key('run_next')));
+  }
+  await tapAndSettle(tester, find.byKey(const Key('run_finish')));
+  expect(find.byKey(const Key('quest_run_done')), findsOneWidget);
+}
+
+Future<void> finishQuest(WidgetTester tester) async {
+  await startQuest(tester);
+  await stepToEnd(tester);
+}
+
+/// Start the quest, then "Give up" (confirmed): album + rating form, "Didn't finish".
+Future<void> giveUpQuest(WidgetTester tester) async {
+  await startQuest(tester);
+  await tapAndSettle(tester, find.byKey(const Key('run_give_up')));
+  await tapAndSettle(tester, find.byKey(const Key('give_up_confirm')));
+  expect(find.byKey(const Key('quest_run_done')), findsOneWidget);
+}
+
 Future<void> enter(WidgetTester tester, String key, String text) async {
   final finder = find.byKey(Key(key));
   await tester.ensureVisible(finder);
@@ -268,6 +297,7 @@ void main() {
       final questId = state.quests.first.id;
 
       backend.online = false;
+      await finishQuest(tester); // works offline too
       await tapAndSettle(tester, find.byKey(const Key('star_5')));
       await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
       await continuePastStreak(tester); // the streak counts offline too
@@ -394,7 +424,8 @@ void main() {
       });
       final card = find.byKey(const Key('quest_card'));
       expect(card, findsOneWidget);
-      expect(find.byKey(const Key('feedback_form')), findsOneWidget);
+      expect(find.byKey(const Key('start_quest_button')), findsOneWidget);
+      expect(find.byKey(const Key('feedback_form')), findsNothing); // rated after doing it
       expect(find.descendant(of: card, matching: find.text('10 min')), findsOneWidget);
       expect(find.descendant(of: card, matching: find.text('Challenging')), findsOneWidget);
       expect(find.descendant(of: card, matching: find.text('≤ 1.0 km')), findsOneWidget);
@@ -402,11 +433,18 @@ void main() {
 
     testWidgets('completing a quest needs stars, removes it from the Quest screen and counts it', (tester) async {
       final state = await startLoggedIn(tester);
+      var now = DateTime.now();
+      state.clock = () => now;
       expect(counter(tester), '0');
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      await startQuest(tester);
+      now = now.add(const Duration(minutes: 12, seconds: 10));
+      await stepToEnd(tester);
 
+      expect(textOf(tester, 'run_done_title'), 'Quest complete!');
+      expect(textOf(tester, 'run_total_time'), 'Time: 12:10');
       expect(submitButton(tester).onPressed, isNull); // completed + no rating
-      expect(timeSpentText(tester), '15');
+      expect(timeSpentText(tester), '12'); // from the quest timer
 
       await tapAndSettle(tester, find.byKey(const Key('star_4')));
       expect(submitButton(tester).onPressed, isNotNull);
@@ -427,7 +465,8 @@ void main() {
     testWidgets('an unfinished quest can be sent with or without a rating', (tester) async {
       await startLoggedIn(tester);
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
-      await tapAndSettle(tester, find.byKey(const Key('outcome_not_finished')));
+      await giveUpQuest(tester);
+      expect(tester.widget<ChoiceChip>(find.byKey(const Key('outcome_not_finished'))).selected, isTrue);
 
       expect(timeSpentText(tester), '0');
       expect(submitButton(tester).onPressed, isNotNull); // rating optional
@@ -439,18 +478,144 @@ void main() {
       expect(find.descendant(of: summary, matching: find.textContaining('★★')), findsOneWidget);
     });
 
-    testWidgets('Generate another shows a fresh card and rating form', (tester) async {
+    testWidgets('Generate another shows a fresh card ready to start', (tester) async {
       await startLoggedIn(tester);
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
       expect(find.text('Quest #1'), findsOneWidget);
-      await tapAndSettle(tester, find.byKey(const Key('outcome_not_finished')));
+      await giveUpQuest(tester);
       await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
+      expect(find.byKey(const Key('feedback_summary')), findsOneWidget);
 
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
       expect(find.text('Quest #2'), findsOneWidget);
-      expect(find.byKey(const Key('feedback_form')), findsOneWidget);
+      expect(find.byKey(const Key('start_quest_button')), findsOneWidget);
+      expect(find.byKey(const Key('steps_hidden')), findsOneWidget);
       expect(find.byKey(const Key('feedback_summary')), findsNothing);
-      expect(submitButton(tester).onPressed, isNull); // reset to "Completed it", no rating
+    });
+  });
+
+  group('Step-by-step quests', () {
+    testWidgets('steps show one at a time; Back / Next move between them; the timer runs', (tester) async {
+      final state = await startLoggedIn(tester);
+      var now = DateTime.now();
+      state.clock = () => now;
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      // Before starting: the steps are hidden.
+      expect(find.text('3 steps - you\'ll see them one at a time once you start.'), findsOneWidget);
+      expect(find.text('Step outside'), findsNothing);
+
+      await startQuest(tester);
+      expect(textOf(tester, 'run_step_label'), 'Step 1 of 3');
+      expect(find.text('Step outside'), findsOneWidget);
+      expect(find.text('Count for five minutes'), findsNothing);
+      expect(find.byKey(const Key('run_finish')), findsNothing);
+      expect(tester.widget<OutlinedButton>(find.byKey(const Key('run_prev'))).onPressed, isNull);
+      expect(textOf(tester, 'run_clock'), '0:00');
+
+      await tapAndSettle(tester, find.byKey(const Key('run_next')));
+      expect(textOf(tester, 'run_step_label'), 'Step 2 of 3');
+      expect(find.text('Count for five minutes'), findsOneWidget);
+      expect(find.text('Step outside'), findsNothing);
+      await tapAndSettle(tester, find.byKey(const Key('run_prev')));
+      expect(textOf(tester, 'run_step_label'), 'Step 1 of 3');
+      await tapAndSettle(tester, find.byKey(const Key('run_next')));
+      await tapAndSettle(tester, find.byKey(const Key('run_next')));
+      expect(textOf(tester, 'run_step_label'), 'Step 3 of 3');
+      expect(find.byKey(const Key('run_next')), findsNothing);
+      expect(find.byKey(const Key('run_finish')), findsOneWidget); // only on the last step
+
+      now = now.add(const Duration(minutes: 1, seconds: 5));
+      await tester.pump(const Duration(seconds: 1)); // the clock ticks every second
+      expect(textOf(tester, 'run_clock'), '1:05');
+
+      // Leaving the screen doesn't stop it: the Quest tab offers to continue.
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('resume_quest_button')), findsOneWidget);
+      expect(find.textContaining('step 3 of 3'), findsOneWidget);
+
+      // ...even after the app is closed.
+      await tester.pumpWidget(const SizedBox());
+      final again = await startApp(tester);
+      expect(again.questRun?.step, 2);
+      await tapAndSettle(tester, find.byKey(const Key('resume_quest_button')));
+      expect(textOf(tester, 'run_step_label'), 'Step 3 of 3');
+    });
+
+    testWidgets('a photo at each step ends up in the album, labelled with its step', (tester) async {
+      final state = await startLoggedIn(tester);
+      QuestJournal.pickPhoto = ({required bool camera}) async =>
+          PickedPhoto(Uint8List.fromList(tinyPng), 'image/png');
+      addTearDown(() => QuestJournal.pickPhoto = ({required bool camera}) async => null);
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      final questId = state.activeQuest!.id;
+      await startQuest(tester);
+
+      await tapAndSettle(tester, find.byKey(const Key('run_photo_button')));
+      final first = state.journal(questId).single;
+      expect(first.step, 1);
+      expect(find.byKey(Key('run_photo_${first.clientId}')), findsOneWidget);
+      await tapAndSettle(tester, find.byKey(const Key('run_next')));
+      expect(find.byKey(Key('run_photo_${first.clientId}')), findsNothing); // step 1's photo stays with step 1
+      await tapAndSettle(tester, find.byKey(const Key('run_next')));
+      await tapAndSettle(tester, find.byKey(const Key('run_photo_button')));
+      await tapAndSettle(tester, find.byKey(const Key('run_finish')));
+
+      expect(find.byKey(const Key('quest_album')), findsOneWidget);
+      expect(textOf(tester, 'album_position'), '1 / 2');
+      expect(textOf(tester, 'album_caption'), 'Step 1 · Step outside');
+      await tapAndSettle(tester, find.byKey(const Key('album_next')));
+      expect(textOf(tester, 'album_position'), '2 / 2');
+      expect(textOf(tester, 'album_caption'), 'Step 3 · Note your favourite');
+      await tapAndSettle(tester, find.byKey(const Key('album_prev')));
+      expect(textOf(tester, 'album_position'), '1 / 2');
+
+      expect(backend.logs[state.account!.id]!.map((l) => l['step']), [1, 3]); // uploaded with the step
+    });
+
+    testWidgets('no photos: the album says so', (tester) async {
+      await startLoggedIn(tester);
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      await finishQuest(tester);
+      expect(find.byKey(const Key('album_empty')), findsOneWidget);
+    });
+
+    testWidgets('Give up asks first, stops the clock and pre-fills the time; "keep going" undoes it',
+        (tester) async {
+      final state = await startLoggedIn(tester);
+      var now = DateTime.now();
+      state.clock = () => now;
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      final questId = state.activeQuest!.id;
+      await startQuest(tester);
+      await tapAndSettle(tester, find.byKey(const Key('run_next')));
+      now = now.add(const Duration(minutes: 7));
+
+      await tapAndSettle(tester, find.byKey(const Key('run_give_up')));
+      await tapAndSettle(tester, find.byKey(const Key('give_up_cancel')));
+      expect(find.byKey(const Key('quest_run_screen')), findsOneWidget); // still going
+
+      await tapAndSettle(tester, find.byKey(const Key('run_give_up')));
+      await tapAndSettle(tester, find.byKey(const Key('give_up_confirm')));
+      expect(textOf(tester, 'run_done_title'), 'You gave it a go');
+      expect(textOf(tester, 'run_total_time'), 'Time: 7:00 · stopped at step 2 of 3');
+      expect(timeSpentText(tester), '7');
+      now = now.add(const Duration(minutes: 5));
+      await tester.pump(const Duration(seconds: 2));
+      expect(textOf(tester, 'run_clock'), '7:00'); // stopped
+
+      await tapAndSettle(tester, find.byKey(const Key('run_resume')));
+      expect(textOf(tester, 'run_step_label'), 'Step 2 of 3');
+
+      await tapAndSettle(tester, find.byKey(const Key('run_give_up')));
+      await tapAndSettle(tester, find.byKey(const Key('give_up_confirm')));
+      await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
+      expect(find.byKey(const Key('quest_run_done')), findsNothing); // back on the Quest tab
+      expect(find.byKey(const Key('feedback_summary')), findsOneWidget);
+      expect(state.questRun, isNull);
+      final saved = backend.quests[state.account!.id]!.firstWhere((q) => q['id'] == questId);
+      expect(saved['feedback']['completed'], isFalse);
+      expect(saved['feedback']['time_logged_minutes'], 12);
     });
   });
 
@@ -565,6 +730,9 @@ void main() {
       addTearDown(() => QuestJournal.pickPhoto = ({required bool camera}) async => null);
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
       final questId = state.activeQuest!.id;
+      // The quest log lives on the quest's page (History).
+      await tapAndSettle(tester, navItem('History'));
+      await tapAndSettle(tester, find.byKey(Key('history_quest_$questId')));
 
       await enter(tester, 'journal_note_field', 'Saw a heron by the pond');
       await tapAndSettle(tester, find.byKey(const Key('add_note_button')));
@@ -686,8 +854,9 @@ void main() {
     });
 
     testWidgets('a quest can be turned into an Instagram post (button only for now)', (tester) async {
-      await startLoggedIn(tester);
-      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      final state = await startLoggedIn(tester, quests: 1);
+      await tapAndSettle(tester, navItem('History'));
+      await tapAndSettle(tester, find.byKey(Key('history_quest_${state.quests.single.id}')));
       await tapAndSettle(tester, find.byKey(const Key('instagram_post_button')));
       expect(find.textContaining('Instagram posts is coming soon'), findsOneWidget);
     });
@@ -720,6 +889,7 @@ void main() {
       expect(find.textContaining('to start a streak'), findsOneWidget);
 
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      await finishQuest(tester);
       await tapAndSettle(tester, find.byKey(const Key('star_5')));
       await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
 
@@ -741,6 +911,7 @@ void main() {
       await startLoggedIn(tester);
       for (var i = 0; i < 2; i++) {
         await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+        await finishQuest(tester);
         await tapAndSettle(tester, find.byKey(const Key('star_4')));
         await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
         if (i == 0) await continuePastStreak(tester);
@@ -752,7 +923,7 @@ void main() {
     testWidgets('a skipped quest does not count', (tester) async {
       await startLoggedIn(tester);
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
-      await tapAndSettle(tester, find.byKey(const Key('outcome_not_finished')));
+      await giveUpQuest(tester);
       await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
       expect(find.byKey(const Key('streak_celebration')), findsNothing);
       expect(streakText(tester), '0 day streak');
@@ -790,6 +961,7 @@ void main() {
       await tester.pumpAndSettle();
 
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      await finishQuest(tester);
       await tapAndSettle(tester, find.byKey(const Key('star_5')));
       await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
 
@@ -1226,7 +1398,7 @@ void main() {
       expect(backend.lastQuestSettings!['location'], {'lat': 43.6677, 'lon': -79.3534, 'accuracy_m': 8.0});
       expect(backend.lastQuestSettings!.containsKey('place'), isFalse);
       expect(textOf(tester, 'quest_conditions'), '📍 Riverdale, Toronto · 12°C, light rain');
-      expect(find.byKey(const Key('route_start')), findsOneWidget);
+      expect(find.byKey(const Key('start_quest_button')), findsOneWidget);
     });
 
     testWidgets('without location you can type where you are', (tester) async {
@@ -1257,15 +1429,16 @@ void main() {
       expect(gps.settingsOpened, 1);
     });
 
-    testWidgets('track the route, see it live, stop uploads it', (tester) async {
+    testWidgets('starting a quest opens the map and records the route; finishing uploads it', (tester) async {
       gps.position = at(0);
       final state = await startLoggedIn(tester);
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
       final questId = state.activeQuest!.id;
 
-      await tapAndSettle(tester, find.byKey(const Key('route_start')));
+      await startQuest(tester);
       expect(gps.tracking, isTrue);
-      expect(find.byKey(const Key('tracking_chip')), findsOneWidget);
+      expect(state.isTracking(questId), isTrue);
+      expect(find.byKey(const Key('route_map')), findsOneWidget); // OpenStreetMap, right away
       expect(find.byKey(const Key('route_waiting')), findsOneWidget);
 
       for (var i = 0; i < 3; i++) {
@@ -1276,15 +1449,27 @@ void main() {
       expect(find.byKey(const Key('route_map')), findsOneWidget);
       expect(textOf(tester, 'route_summary'), '111 m · 1 min');
 
-      await tapAndSettle(tester, find.byKey(const Key('route_stop')));
+      await stepToEnd(tester);
       expect(gps.tracking, isFalse);
       expect(state.isTracking(questId), isFalse);
+      expect(textOf(tester, 'run_total_time'), endsWith('walked 111 m · 1 min'));
+      expect(find.byKey(const Key('route_map')), findsOneWidget); // the whole route, next to the album
       await state.sync(); // the upload stop started runs on the real event loop - wait for it
       await tester.pumpAndSettle();
       expect(backend.requests, contains('PUT /users/${state.account!.id}/quests/$questId/route'));
       expect(backend.routes[questId]?['points'], hasLength(3));
       expect(state.pendingChanges, 0);
-      expect(find.text('Continue tracking'), findsOneWidget);
+    });
+
+    testWidgets('no GPS: the quest still runs, the map offers to try again', (tester) async {
+      await startLoggedIn(tester);
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      await startQuest(tester);
+      expect(find.byKey(const Key('run_map_message')), findsOneWidget);
+      gps.position = at(0);
+      await tapAndSettle(tester, find.byKey(const Key('run_map_retry')));
+      expect(gps.tracking, isTrue);
+      expect(find.byKey(const Key('route_map')), findsOneWidget);
     });
 
     testWidgets('completing a quest stops tracking; the route shows in History', (tester) async {
@@ -1292,11 +1477,12 @@ void main() {
       final state = await startLoggedIn(tester);
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
       final questId = state.activeQuest!.id;
-      await tapAndSettle(tester, find.byKey(const Key('route_start')));
+      await startQuest(tester);
       gps.walkTo(at(0));
       gps.walkTo(at(1));
       await tester.pumpAndSettle();
 
+      await stepToEnd(tester);
       await tapAndSettle(tester, find.byKey(const Key('star_5')));
       await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
       await state.sync(); // let the route + rating uploads finish
@@ -1319,11 +1505,12 @@ void main() {
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
       final questId = state.activeQuest!.id;
       backend.online = false;
-      await tapAndSettle(tester, find.byKey(const Key('route_start')));
+      await startQuest(tester);
       gps.walkTo(at(0));
       gps.walkTo(at(1));
       await tester.pumpAndSettle();
-      await tapAndSettle(tester, find.byKey(const Key('route_stop')));
+      await tapAndSettle(tester, find.byKey(const Key('run_give_up')));
+      await tapAndSettle(tester, find.byKey(const Key('give_up_confirm'))); // stops recording
       expect(state.pendingChanges, 1);
       expect(backend.routes, isEmpty);
 

@@ -5,15 +5,17 @@ import '../../data/app_scope.dart';
 import '../../models/quest_record.dart';
 import '../home_shell.dart';
 
-/// History tab: your previous quests, newest first. Read from the on-device
-/// cache (works offline); pull down to refresh from the server.
+/// History tab: quests you finished or gave up on, newest first (given-up
+/// ones can be resumed from their page). The quest you're doing now and ones
+/// you left for a new quest aren't listed. Read from the on-device cache
+/// (works offline); pull down to refresh from the server.
 class QuestHistoryScreen extends StatelessWidget {
   const QuestHistoryScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
-    final quests = state.quests;
+    final quests = state.historyQuests;
     return Scaffold(
       appBar: AppBar(title: const Text('Your quests')),
       body: RefreshIndicator(
@@ -53,9 +55,9 @@ class QuestHistoryScreen extends StatelessWidget {
 }
 
 String statusLabel(QuestStatus status) => switch (status) {
-      QuestStatus.suggested => 'Not done yet',
+      QuestStatus.suggested => 'Started', // never listed in History
       QuestStatus.completed => 'Completed',
-      QuestStatus.skipped => "Didn't finish",
+      QuestStatus.skipped => 'Gave up',
     };
 
 class _StatusIcon extends StatelessWidget {
@@ -69,7 +71,7 @@ class _StatusIcon extends StatelessWidget {
     return switch (status) {
       QuestStatus.suggested => Icon(Icons.schedule, color: colors.secondary),
       QuestStatus.completed => Icon(Icons.check_circle, color: colors.primary),
-      QuestStatus.skipped => Icon(Icons.remove_circle_outline, color: colors.outline),
+      QuestStatus.skipped => Icon(Icons.pause_circle_outline, color: colors.outline),
     };
   }
 }

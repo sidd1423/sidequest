@@ -21,10 +21,13 @@ typedef PhotoPicker = Future<PickedPhoto?> Function({required bool camera});
 /// Notes and photos for one quest ("Quest log"). Shown under the active quest
 /// on the Quest tab and on each quest's detail page. Everything is saved on
 /// the device first and uploaded when online.
+///
+/// [readOnly] (a completed quest): shown, but nothing can be added or deleted.
 class QuestJournal extends StatefulWidget {
-  const QuestJournal({super.key, required this.questId});
+  const QuestJournal({super.key, required this.questId, this.readOnly = false});
 
   final int questId;
+  final bool readOnly;
 
   /// Swappable in tests (the real picker needs the platform).
   static PhotoPicker pickPhoto = _pickWithImagePicker;
@@ -114,6 +117,7 @@ class _QuestJournalState extends State<QuestJournal> {
     final entries = AppScope.of(context).journal(widget.questId);
     final photos = entries.where((e) => e.isPhoto).toList();
     final notes = entries.where((e) => !e.isPhoto).toList();
+    final readOnly = widget.readOnly;
     return Card(
       key: const Key('quest_journal'),
       child: Padding(
@@ -123,7 +127,10 @@ class _QuestJournalState extends State<QuestJournal> {
           children: [
             Text('Quest log', style: theme.textTheme.titleMedium),
             Text(
-              'Notes and photos from your quest - just for you.',
+              readOnly
+                  ? 'Notes and photos from your quest - just for you. Locked now that it\'s complete.'
+                  : 'Notes and photos from your quest - just for you.',
+              key: const Key('journal_hint'),
               style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
             if (photos.isNotEmpty) ...[
@@ -131,51 +138,58 @@ class _QuestJournalState extends State<QuestJournal> {
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
-                children: [for (final p in photos) _PhotoTile(entry: p)],
+                children: [for (final p in photos) _PhotoTile(entry: p, readOnly: readOnly)],
               ),
             ],
-            for (final n in notes) _NoteTile(entry: n),
-            const SizedBox(height: 12),
-            TextField(
-              key: const Key('journal_note_field'),
-              controller: _note,
-              minLines: 1,
-              maxLines: 4,
-              maxLength: 2000,
-              textCapitalization: TextCapitalization.sentences,
-              decoration: const InputDecoration(
-                labelText: 'Add a note',
-                hintText: 'What did you see? How did it go?',
-                counterText: '',
+            for (final n in notes) _NoteTile(entry: n, readOnly: readOnly),
+            if (readOnly && entries.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(top: 8),
+                child: Text('Nothing was added to this quest.', key: Key('journal_empty')),
               ),
-              onSubmitted: (_) => _addNote(),
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                FilledButton.tonalIcon(
-                  key: const Key('add_note_button'),
-                  onPressed: _addNote,
-                  icon: const Icon(Icons.edit_note),
-                  label: const Text('Save note'),
+            if (!readOnly) ...[
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('journal_note_field'),
+                controller: _note,
+                minLines: 1,
+                maxLines: 4,
+                maxLength: 2000,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: const InputDecoration(
+                  labelText: 'Add a note',
+                  hintText: 'What did you see? How did it go?',
+                  counterText: '',
                 ),
-                OutlinedButton.icon(
-                  key: const Key('add_photo_button'),
-                  onPressed: _picking ? null : () => _addPhoto(camera: false),
-                  icon: const Icon(Icons.photo_library_outlined),
-                  label: const Text('Add photo'),
-                ),
-                if (QuestJournal.cameraAvailable)
-                  OutlinedButton.icon(
-                    key: const Key('take_photo_button'),
-                    onPressed: _picking ? null : () => _addPhoto(camera: true),
-                    icon: const Icon(Icons.photo_camera_outlined),
-                    label: const Text('Take photo'),
+                onSubmitted: (_) => _addNote(),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  FilledButton.tonalIcon(
+                    key: const Key('add_note_button'),
+                    onPressed: _addNote,
+                    icon: const Icon(Icons.edit_note),
+                    label: const Text('Save note'),
                   ),
-              ],
-            ),
+                  OutlinedButton.icon(
+                    key: const Key('add_photo_button'),
+                    onPressed: _picking ? null : () => _addPhoto(camera: false),
+                    icon: const Icon(Icons.photo_library_outlined),
+                    label: const Text('Add photo'),
+                  ),
+                  if (QuestJournal.cameraAvailable)
+                    OutlinedButton.icon(
+                      key: const Key('take_photo_button'),
+                      onPressed: _picking ? null : () => _addPhoto(camera: true),
+                      icon: const Icon(Icons.photo_camera_outlined),
+                      label: const Text('Take photo'),
+                    ),
+                ],
+              ),
+            ],
             const Divider(height: 32),
             // Placeholder: will turn the quest + its photos/notes into a post.
             OutlinedButton.icon(
@@ -198,9 +212,10 @@ String _when(DateTime t) {
 }
 
 class _NoteTile extends StatelessWidget {
-  const _NoteTile({required this.entry});
+  const _NoteTile({required this.entry, required this.readOnly});
 
   final JournalEntry entry;
+  final bool readOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -210,20 +225,23 @@ class _NoteTile extends StatelessWidget {
       leading: Icon(entry.pending ? Icons.cloud_upload_outlined : Icons.sticky_note_2_outlined),
       title: Text(entry.text),
       subtitle: Text(_when(entry.createdAt) + (entry.pending ? ' · waiting to sync' : '')),
-      trailing: IconButton(
-        key: Key('delete_entry_${entry.clientId}'),
-        tooltip: 'Delete note',
-        icon: const Icon(Icons.delete_outline),
-        onPressed: () => AppScope.read(context).deleteJournalEntry(entry),
-      ),
+      trailing: readOnly
+          ? null
+          : IconButton(
+              key: Key('delete_entry_${entry.clientId}'),
+              tooltip: 'Delete note',
+              icon: const Icon(Icons.delete_outline),
+              onPressed: () => AppScope.read(context).deleteJournalEntry(entry),
+            ),
     );
   }
 }
 
 class _PhotoTile extends StatefulWidget {
-  const _PhotoTile({required this.entry});
+  const _PhotoTile({required this.entry, required this.readOnly});
 
   final JournalEntry entry;
+  final bool readOnly;
 
   @override
   State<_PhotoTile> createState() => _PhotoTileState();
@@ -278,17 +296,18 @@ class _PhotoTileState extends State<_PhotoTile> {
                   ),
                 ),
               ),
-              Positioned(
-                right: 0,
-                top: 0,
-                child: IconButton.filledTonal(
-                  key: Key('delete_entry_${entry.clientId}'),
-                  tooltip: 'Delete photo',
-                  iconSize: 18,
-                  icon: const Icon(Icons.close),
-                  onPressed: () => state.deleteJournalEntry(entry),
+              if (!widget.readOnly)
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  child: IconButton.filledTonal(
+                    key: Key('delete_entry_${entry.clientId}'),
+                    tooltip: 'Delete photo',
+                    iconSize: 18,
+                    icon: const Icon(Icons.close),
+                    onPressed: () => state.deleteJournalEntry(entry),
+                  ),
                 ),
-              ),
               if (entry.pending)
                 const Positioned(
                   left: 4,

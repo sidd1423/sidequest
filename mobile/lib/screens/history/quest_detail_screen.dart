@@ -1,30 +1,40 @@
 import 'package:flutter/material.dart';
 
+import '../../app_routes.dart';
 import '../../data/app_scope.dart';
-import '../../models/generated_quest.dart';
 import '../../models/quest_record.dart';
+import '../../models/quest_run.dart';
 import '../../widgets/quest_journal.dart';
 import '../../widgets/quest_run_widgets.dart';
 import '../../widgets/route_tracker.dart';
 import '../quest/quest_card.dart';
-import '../quest/quest_feedback_form.dart';
-import '../streak/streak_celebration_screen.dart';
 import 'quest_history_screen.dart';
 
-/// One past quest: the full quest card, its quest log (notes + photos), how
-/// it went, and a rating form if you haven't rated it yet (all work offline -
-/// they sync later).
+/// One past quest (finished or given up): the full quest card, how it went,
+/// the album, the route and the quest log. A given-up quest can be resumed
+/// (clock carries on from the time recorded); a completed quest's log is
+/// read-only.
 /// Pushed on the root navigator, so it has a back button instead of the bottom bar.
 class QuestDetailScreen extends StatelessWidget {
   const QuestDetailScreen({super.key, required this.questId});
 
   final int questId;
 
+  Future<void> _resume(BuildContext context) async {
+    final state = AppScope.read(context);
+    final navigator = Navigator.of(context);
+    if (!await confirmQuitCurrentQuest(context, exceptQuestId: questId)) return;
+    await state.resumeGivenUp(questId);
+    // Done (or given up again) -> back to History, not to this page.
+    await navigator.pushReplacementNamed(AppRoutes.questRun, arguments: questId);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
     final matches = state.quests.where((q) => q.id == questId);
     final record = matches.isEmpty ? null : matches.first;
+    final completed = record?.status == QuestStatus.completed;
     return Scaffold(
       appBar: AppBar(title: const Text('Quest')),
       body: record == null
@@ -35,9 +45,18 @@ class QuestDetailScreen extends StatelessWidget {
               children: [
                 QuestCard(quest: record.quest, party: record.party, conditions: record.conditions),
                 const SizedBox(height: 16),
-                // Not done yet: do it now, step by step.
-                if (record.status != QuestStatus.completed) ...[
-                  QuestStartButton(record: record),
+                if (record.feedback != null) ...[
+                  _HowItWent(record: record),
+                  const SizedBox(height: 16),
+                ],
+                if (record.status == QuestStatus.skipped && state.runFor(record.id) == null) ...[
+                  FilledButton.icon(
+                    key: const Key('resume_from_history'),
+                    style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                    onPressed: () => _resume(context),
+                    icon: const Icon(Icons.play_arrow),
+                    label: Text('Resume quest · from ${formatElapsed(state.recordedTime(record.id))}'),
+                  ),
                   const SizedBox(height: 16),
                 ],
                 if (albumPhotos(state.journal(record.id)).isNotEmpty) ...[
@@ -56,28 +75,10 @@ class QuestDetailScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
                 ],
-                // Not completed yet: you can still record the route from here.
-                RouteTracker(
-                  questId: record.id,
-                  canTrack: record.status != QuestStatus.completed || state.isTracking(record.id),
-                  places: record.conditions?.nearby ?? const [],
-                ),
+                // Routes are recorded while doing the quest; here they're just shown.
+                RouteTracker(questId: record.id, places: record.conditions?.nearby ?? const []),
                 const SizedBox(height: 16),
-                QuestJournal(questId: record.id),
-                const SizedBox(height: 16),
-                if (record.feedback == null)
-                  QuestFeedbackForm(
-                    estimatedMinutes: record.quest.minutes,
-                    onSubmit: (QuestFeedback f) async {
-                      final wasExtended = state.streak.extendedToday;
-                      await state.sendFeedback(record.id, f);
-                      if (context.mounted && f.completed) {
-                        await StreakCelebrationScreen.showIfExtended(context, wasExtended: wasExtended);
-                      }
-                    },
-                  )
-                else
-                  _HowItWent(record: record),
+                QuestJournal(questId: record.id, readOnly: completed),
               ],
             ),
     );

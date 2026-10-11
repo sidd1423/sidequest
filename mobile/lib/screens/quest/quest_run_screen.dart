@@ -87,7 +87,7 @@ class _QuestRunScreenState extends State<QuestRunScreen> {
     final synced = state.isOnline ? '' : " It'll sync when you're back online.";
     final message = feedback.completed
         ? "Quest complete! That's ${state.completedCount} so far - it's in History now.$synced"
-        : 'Thanks! Your next quest will take this into account.$synced';
+        : 'Saved in History - you can resume it from there.$synced';
     // The celebration first, so the snackbar doesn't cover its Continue button.
     if (mounted && feedback.completed) await StreakCelebrationScreen.showIfExtended(context, wasExtended: wasExtended);
     if (mounted) navigator.pop();
@@ -387,9 +387,8 @@ class _EndedView extends StatelessWidget {
         const SizedBox(height: 16),
         QuestFeedbackForm(
           key: ValueKey('run_feedback_${record.id}_${run.gaveUp}'),
-          estimatedMinutes: record.quest.minutes,
-          initialCompleted: !run.gaveUp,
-          timeSpentMinutes: run.minutes(now),
+          completed: !run.gaveUp, // from the button they tapped
+          minutes: run.minutes(now), // from the timer
           onSubmit: onSubmit,
         ),
         const SizedBox(height: 8),

@@ -57,7 +57,9 @@ Future<AppState> startLoggedIn(WidgetTester tester, {bool withPrefs = true, int 
   useTallScreen(tester);
   final user = backend.addUser(prefs: withPrefs ? Map.of(savedPrefs) : null);
   for (var i = 0; i < quests; i++) {
-    backend.addQuest(user['id'] as String, title: i == 0 ? 'Bench Bird Count' : 'Quest $i');
+    // Given up earlier (History only lists quests finished or given up).
+    backend.addQuest(user['id'] as String, title: i == 0 ? 'Bench Bird Count' : 'Quest $i',
+        feedback: {'completed': false, 'rating': null, 'comment': '', 'time_logged_minutes': 4});
   }
   await secure.write('session', jsonEncode(backend.sessionFor(user['id'] as String)));
   final state = newState();
@@ -82,8 +84,6 @@ FilledButton finishButton(WidgetTester tester) =>
 FilledButton submitButton(WidgetTester tester) =>
     tester.widget<FilledButton>(find.byKey(const Key('submit_feedback_button')));
 
-String timeSpentText(WidgetTester tester) =>
-    tester.widget<TextField>(find.byKey(const Key('time_spent_field'))).controller!.text;
 
 /// A real 1x1 PNG, so image decoding in the photo test doesn't error.
 final tinyPng = base64Decode(
@@ -444,7 +444,9 @@ void main() {
       expect(textOf(tester, 'run_done_title'), 'Quest complete!');
       expect(textOf(tester, 'run_total_time'), 'Time: 12:10');
       expect(submitButton(tester).onPressed, isNull); // completed + no rating
-      expect(timeSpentText(tester), '12'); // from the quest timer
+      // Finished + time come from the buttons and the timer - not asked.
+      expect(find.byKey(const Key('outcome_completed')), findsNothing);
+      expect(find.byKey(const Key('time_spent_field')), findsNothing);
 
       await tapAndSettle(tester, find.byKey(const Key('star_4')));
       expect(submitButton(tester).onPressed, isNotNull);
@@ -460,22 +462,26 @@ void main() {
       expect(state.pendingChanges, 0);
       expect(backend.quests[state.account!.id]!.first['status'], 'completed');
       expect(backend.quests[state.account!.id]!.first['feedback']['comment'], 'great light');
+      expect(backend.quests[state.account!.id]!.first['feedback']['time_logged_minutes'], 12); // the timer
     });
 
-    testWidgets('an unfinished quest can be sent with or without a rating', (tester) async {
-      await startLoggedIn(tester);
+    testWidgets('a given-up quest can be sent with or without a rating and goes to History', (tester) async {
+      final state = await startLoggedIn(tester);
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      final questId = state.activeQuest!.id;
       await giveUpQuest(tester);
-      expect(tester.widget<ChoiceChip>(find.byKey(const Key('outcome_not_finished'))).selected, isTrue);
+      expect(find.byKey(const Key('outcome_not_finished')), findsNothing); // known from the button
+      expect(find.text('Rating (optional)'), findsOneWidget);
 
-      expect(timeSpentText(tester), '0');
       expect(submitButton(tester).onPressed, isNotNull); // rating optional
       await tapAndSettle(tester, find.byKey(const Key('star_2')));
       await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
 
-      final summary = find.byKey(const Key('feedback_summary'));
-      expect(find.descendant(of: summary, matching: find.textContaining("Didn't finish")), findsOneWidget);
-      expect(find.descendant(of: summary, matching: find.textContaining('★★')), findsOneWidget);
+      expect(find.byKey(const Key('quest_card')), findsNothing); // off the Quest tab
+      expect(find.textContaining('you can resume it'), findsOneWidget);
+      await tapAndSettle(tester, navItem('History'));
+      expect(find.descendant(of: find.byKey(Key('history_quest_$questId')), matching: find.text('15 min · Gave up · ★★')),
+          findsOneWidget);
     });
 
     testWidgets('Generate another shows a fresh card ready to start', (tester) async {
@@ -484,9 +490,10 @@ void main() {
       expect(find.text('Quest #1'), findsOneWidget);
       await giveUpQuest(tester);
       await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
-      expect(find.byKey(const Key('feedback_summary')), findsOneWidget);
+      expect(find.byKey(const Key('quest_card')), findsNothing);
 
-      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      await tapAndSettle(tester, find.byKey(const Key('generate_button'))); // nothing unfinished: no question
+      expect(find.byKey(const Key('quit_quest_dialog')), findsNothing);
       expect(find.text('Quest #2'), findsOneWidget);
       expect(find.byKey(const Key('start_quest_button')), findsOneWidget);
       expect(find.byKey(const Key('steps_hidden')), findsOneWidget);
@@ -599,48 +606,156 @@ void main() {
       await tapAndSettle(tester, find.byKey(const Key('give_up_confirm')));
       expect(textOf(tester, 'run_done_title'), 'You gave it a go');
       expect(textOf(tester, 'run_total_time'), 'Time: 7:00 · stopped at step 2 of 3');
-      expect(timeSpentText(tester), '7');
-      now = now.add(const Duration(minutes: 5));
+      now = now.add(const Duration(minutes: 5)); // time away
       await tester.pump(const Duration(seconds: 2));
       expect(textOf(tester, 'run_clock'), '7:00'); // stopped
 
       await tapAndSettle(tester, find.byKey(const Key('run_resume')));
       expect(textOf(tester, 'run_step_label'), 'Step 2 of 3');
+      expect(textOf(tester, 'run_clock'), '7:00'); // the 5 minutes away don't count
+      now = now.add(const Duration(minutes: 1));
 
       await tapAndSettle(tester, find.byKey(const Key('run_give_up')));
       await tapAndSettle(tester, find.byKey(const Key('give_up_confirm')));
       await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
       expect(find.byKey(const Key('quest_run_done')), findsNothing); // back on the Quest tab
-      expect(find.byKey(const Key('feedback_summary')), findsOneWidget);
       expect(state.questRun, isNull);
       final saved = backend.quests[state.account!.id]!.firstWhere((q) => q['id'] == questId);
       expect(saved['feedback']['completed'], isFalse);
-      expect(saved['feedback']['time_logged_minutes'], 12);
+      expect(saved['feedback']['time_logged_minutes'], 8);
+    });
+
+    testWidgets('generating while a quest is unfinished asks to quit it; a quit quest is not in History',
+        (tester) async {
+      final state = await startLoggedIn(tester);
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      final first = state.activeQuest!.id;
+      await startQuest(tester);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      expect(find.byKey(const Key('quit_quest_dialog')), findsOneWidget);
+      await tapAndSettle(tester, find.byKey(const Key('quit_quest_cancel')));
+      expect(state.activeQuest!.id, first); // kept
+      expect(find.byKey(const Key('resume_quest_button')), findsOneWidget);
+
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      await tapAndSettle(tester, find.byKey(const Key('quit_quest_confirm')));
+      expect(find.text('Quest #2'), findsOneWidget);
+      expect(state.questRun, isNull);
+      expect(state.historyQuests.map((q) => q.id), isNot(contains(first)));
+      expect(backend.quests[state.account!.id]!.any((q) => q['id'] == first), isTrue); // still in the database
+
+      // A quest not even started is asked about too.
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      expect(find.byKey(const Key('quit_quest_dialog')), findsOneWidget);
+    });
+
+    testWidgets('the quest you are doing is not in History until you finish or give up', (tester) async {
+      final state = await startLoggedIn(tester);
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      final questId = state.activeQuest!.id;
+      await startQuest(tester);
+      expect(state.historyQuests.map((q) => q.id), isNot(contains(questId)));
+      await stepToEnd(tester); // finished, not rated yet
+      expect(state.historyQuests.map((q) => q.id), isNot(contains(questId)));
+      await tapAndSettle(tester, find.byKey(const Key('star_5')));
+      await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
+      await continuePastStreak(tester);
+      expect(state.historyQuests.first.id, questId);
+    });
+
+    testWidgets('Resume a given-up quest from History: same step, the clock starts from its time', (tester) async {
+      final state = await startLoggedIn(tester);
+      var now = DateTime.now();
+      state.clock = () => now;
+      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
+      final questId = state.activeQuest!.id;
+      await startQuest(tester);
+      await tapAndSettle(tester, find.byKey(const Key('run_next')));
+      now = now.add(const Duration(minutes: 6, seconds: 30));
+      await tapAndSettle(tester, find.byKey(const Key('run_give_up')));
+      await tapAndSettle(tester, find.byKey(const Key('give_up_confirm')));
+      await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
+
+      now = now.add(const Duration(minutes: 20)); // later...
+      await tapAndSettle(tester, navItem('History'));
+      await tapAndSettle(tester, find.byKey(Key('history_quest_$questId')));
+      expect(find.text('Resume quest · from 6:30'), findsOneWidget);
+      await tapAndSettle(tester, find.byKey(const Key('resume_from_history')));
+
+      expect(textOf(tester, 'run_step_label'), 'Step 2 of 3');
+      expect(textOf(tester, 'run_clock'), '6:30');
+      expect(state.activeQuest?.id, questId);
+      expect(state.historyQuests.map((q) => q.id), isNot(contains(questId))); // doing it now
+
+      now = now.add(const Duration(minutes: 3));
+      await stepToEnd(tester);
+      expect(textOf(tester, 'run_total_time'), 'Time: 9:30');
+      await tapAndSettle(tester, find.byKey(const Key('star_5')));
+      await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
+      await continuePastStreak(tester);
+      expect(selectedTab(tester), 1); // back on History
+      final saved = backend.quests[state.account!.id]!.firstWhere((q) => q['id'] == questId);
+      expect(saved['status'], 'completed');
+      expect(saved['feedback']['time_logged_minutes'], 10);
+      expect(find.byKey(Key('history_quest_$questId')), findsOneWidget);
+    });
+
+    testWidgets('a completed quest\'s log can\'t be changed', (tester) async {
+      final user = backend.addUser(prefs: Map.of(savedPrefs));
+      final id = user['id'] as String;
+      final q = backend.addQuest(id, title: 'Done One', feedback: {'completed': true, 'rating': 5});
+      backend.logs[id] = [
+        {'id': 1, 'quest_id': q['id'], 'client_id': 'note-done-1', 'kind': 'note', 'text': 'Lovely',
+            'mime': null, 'image': null, 'created_at': '2026-10-01T10:00:00Z'},
+      ];
+      await secure.write('session', jsonEncode(backend.sessionFor(id)));
+      useTallScreen(tester);
+      final state = newState();
+      await state.restore();
+      await state.sync();
+      await tester.pumpWidget(SidequestApp(state: state));
+      await tester.pumpAndSettle();
+      await tapAndSettle(tester, navItem('History'));
+      await tapAndSettle(tester, find.byKey(Key('history_quest_${q['id']}')));
+
+      expect(find.text('Lovely'), findsOneWidget);
+      expect(find.byKey(const Key('journal_note_field')), findsNothing);
+      expect(find.byKey(const Key('add_photo_button')), findsNothing);
+      expect(find.byKey(const Key('delete_entry_note-done-1')), findsNothing);
+      expect(find.byKey(const Key('resume_from_history')), findsNothing);
+      await state.addNote(q['id'] as int, 'sneaky'); // locked in the app state too
+      expect(state.journal(q['id'] as int).map((e) => e.text), ['Lovely']);
     });
   });
 
   group('Pages opened from tabs', () {
-    testWidgets('History -> quest detail -> rate it -> back keeps the History tab', (tester) async {
+    testWidgets('History -> quest detail -> back keeps the History tab; only finished / given-up quests listed',
+        (tester) async {
       final state = await startLoggedIn(tester, quests: 1);
       final id = state.quests.single.id;
+      final user = state.account!.id;
+      backend.addQuest(user, title: 'Never started'); // e.g. left for a new quest
+      await state.sync();
       await tapAndSettle(tester, navItem('History'));
+      expect(find.text('Never started'), findsNothing);
+      expect(find.textContaining('Not done'), findsNothing);
+      expect(find.text('10 min · Gave up'), findsOneWidget);
       await tapAndSettle(tester, find.byKey(Key('history_quest_$id')));
 
       expect(find.byKey(const Key('quest_detail_screen')), findsOneWidget);
       expect(find.text('Bench Bird Count'), findsWidgets);
       expect(find.byKey(const Key('bottom_nav')), findsNothing);
-
-      await tapAndSettle(tester, find.byKey(const Key('star_5')));
-      await tapAndSettle(tester, find.byKey(const Key('submit_feedback_button')));
-      await continuePastStreak(tester);
       expect(find.byKey(const Key('quest_detail_feedback')), findsOneWidget);
-      expect(backend.quests[state.account!.id]!.single['status'], 'completed');
+      expect(find.byKey(const Key('feedback_form')), findsNothing); // rated at the end of the quest
+      expect(find.text('Resume quest · from 4:00'), findsOneWidget); // the time it had
 
       await tester.pageBack();
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('bottom_nav')), findsOneWidget);
       expect(selectedTab(tester), 1);
-      expect(find.text('10 min · Completed · ★★★★★'), findsOneWidget);
     });
 
     testWidgets('Account shows the user; Edit account saves name + preferences', (tester) async {
@@ -724,12 +839,11 @@ void main() {
     });
 
     testWidgets('notes and photos are saved to the quest log and uploaded', (tester) async {
-      final state = await startLoggedIn(tester);
+      final state = await startLoggedIn(tester, quests: 1);
       QuestJournal.pickPhoto = ({required bool camera}) async =>
           PickedPhoto(Uint8List.fromList(tinyPng), 'image/png');
       addTearDown(() => QuestJournal.pickPhoto = ({required bool camera}) async => null);
-      await tapAndSettle(tester, find.byKey(const Key('generate_button')));
-      final questId = state.activeQuest!.id;
+      final questId = state.quests.single.id; // given up - its log can still be changed
       // The quest log lives on the quest's page (History).
       await tapAndSettle(tester, navItem('History'));
       await tapAndSettle(tester, find.byKey(Key('history_quest_$questId')));

@@ -1,7 +1,11 @@
-/// A quest being done step by step: when it was started (the timer), which
-/// step is showing, and how it ended. Kept on the device only (in the cache
-/// "meta"), so the timer keeps running if the app is closed mid-quest. What
-/// the server gets is the time spent, with the rating.
+/// A quest being done step by step: the timer, which step is showing, and
+/// how it ended. Kept on the device only (in the cache "meta"), so the timer
+/// keeps running if the app is closed mid-quest. What the server gets is the
+/// time spent, with the rating.
+///
+/// The timer only counts time while the quest is going: after a give up,
+/// resuming starts a new stretch on top of [priorSeconds], so the gap in
+/// between isn't counted.
 class QuestRun {
   const QuestRun({
     required this.questId,
@@ -9,10 +13,16 @@ class QuestRun {
     this.step = 0,
     this.endedAt,
     this.gaveUp = false,
+    this.priorSeconds = 0,
   });
 
   final int questId;
+
+  /// When the current stretch started.
   final DateTime startedAt;
+
+  /// Time recorded before the current stretch (earlier tries).
+  final int priorSeconds;
 
   /// The step on screen, 0-based.
   final int step;
@@ -23,10 +33,10 @@ class QuestRun {
 
   bool get ended => endedAt != null;
 
-  /// Time on the clock (stops once ended; never negative).
+  /// Time on the clock (stops once ended; never negative; gaps not counted).
   Duration elapsed(DateTime now) {
     final d = (endedAt ?? now).difference(startedAt);
-    return d.isNegative ? Duration.zero : d;
+    return Duration(seconds: priorSeconds) + (d.isNegative ? Duration.zero : d);
   }
 
   /// Whole minutes for the rating form. A finished quest counts at least 1.
@@ -35,14 +45,18 @@ class QuestRun {
     return gaveUp ? m : (m < 1 ? 1 : m);
   }
 
-  QuestRun atStep(int step) =>
-      QuestRun(questId: questId, startedAt: startedAt, step: step, endedAt: endedAt, gaveUp: gaveUp);
+  QuestRun atStep(int step) => QuestRun(
+      questId: questId, startedAt: startedAt, step: step, endedAt: endedAt, gaveUp: gaveUp,
+      priorSeconds: priorSeconds);
 
-  QuestRun end(DateTime at, {required bool gaveUp}) =>
-      QuestRun(questId: questId, startedAt: startedAt, step: step, endedAt: at, gaveUp: gaveUp);
+  QuestRun end(DateTime at, {required bool gaveUp}) => QuestRun(
+      questId: questId, startedAt: startedAt, step: step, endedAt: at, gaveUp: gaveUp,
+      priorSeconds: priorSeconds);
 
-  /// "Oops, keep going": back to the steps, the timer runs again.
-  QuestRun resumed() => QuestRun(questId: questId, startedAt: startedAt, step: step);
+  /// Back to the steps ("keep going", or Resume from History): the clock
+  /// carries on from the time recorded so far - the time away isn't counted.
+  QuestRun resumed(DateTime now) => QuestRun(
+      questId: questId, startedAt: now, step: step, priorSeconds: elapsed(endedAt ?? now).inSeconds);
 
   factory QuestRun.fromJson(Map<String, dynamic> json) => QuestRun(
         questId: (json['quest_id'] as num).toInt(),
@@ -50,6 +64,7 @@ class QuestRun {
         step: (json['step'] as num?)?.toInt() ?? 0,
         endedAt: json['ended_at'] == null ? null : DateTime.parse(json['ended_at'] as String),
         gaveUp: (json['gave_up'] as bool?) ?? false,
+        priorSeconds: (json['prior_seconds'] as num?)?.toInt() ?? 0,
       );
 
   Map<String, dynamic> toJson() => {
@@ -58,6 +73,7 @@ class QuestRun {
         'step': step,
         if (endedAt != null) 'ended_at': endedAt!.toUtc().toIso8601String(),
         if (gaveUp) 'gave_up': true,
+        if (priorSeconds > 0) 'prior_seconds': priorSeconds,
       };
 }
 

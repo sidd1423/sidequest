@@ -61,6 +61,42 @@ class _RunClockState extends State<RunClock> {
   }
 }
 
+/// Before leaving the quest you haven't finished (generating a new one, or
+/// resuming another): "Quit this quest?". true = go ahead. Nothing to ask
+/// (no unfinished quest, or it's [exceptQuestId]) = true.
+///
+/// A quest you quit isn't shown in History (it stays in the database).
+Future<bool> confirmQuitCurrentQuest(BuildContext context, {int? exceptQuestId}) async {
+  final state = AppScope.read(context);
+  final current = state.activeQuest;
+  if (current == null || current.id == exceptQuestId) return true;
+  // Already given up (and not resumed): it's safely in History.
+  if (current.feedback != null && state.runFor(current.id) == null) return true;
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      key: const Key('quit_quest_dialog'),
+      title: const Text('Quit your current quest?'),
+      content: Text(
+        'You haven\'t finished "${current.title}". If you quit, it won\'t be saved in your history.',
+      ),
+      actions: [
+        TextButton(
+          key: const Key('quit_quest_cancel'),
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Keep it'),
+        ),
+        TextButton(
+          key: const Key('quit_quest_confirm'),
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Quit it'),
+        ),
+      ],
+    ),
+  );
+  return ok == true;
+}
+
 /// "Start quest" / "Continue quest" / "Rate your quest" for [record],
 /// depending on where its step-by-step run is. Opens the quest screen.
 class QuestStartButton extends StatelessWidget {

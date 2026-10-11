@@ -70,6 +70,8 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
       );
 
   Future<void> _generate() async {
+    // Not finished the one you have? Ask before leaving it.
+    if (!await confirmQuitCurrentQuest(context) || !mounted) return;
     setState(() {
       _generating = true;
       _error = null;
@@ -250,7 +252,7 @@ class _FeedbackSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final parts = <String>[feedback.completed ? '✅ Completed' : "⏭️ Didn't finish"];
+    final parts = <String>[feedback.completed ? '✅ Completed' : '⏸️ Gave up'];
     if (feedback.rating != null) parts.add('★' * feedback.rating!);
     if (feedback.timeLoggedMinutes > 0) parts.add('${feedback.timeLoggedMinutes} min logged');
     return Card(

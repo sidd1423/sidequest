@@ -75,6 +75,7 @@ class AppState extends ChangeNotifier {
   Set<int> _seenPartyQuests = {}; // group quests already put on the Quest screen
   int? _activeQuestId;
   QuestRun? _run; // the quest being done step by step (timer), if any
+  Map<int, QuestRun> _pausedRuns = {}; // given-up quests: where they stopped + time so far (for Resume)
   Map<int, List<JournalEntry>> _journals = {};
   final Map<String, Uint8List> _photoCache = {}; // downloaded photos, by client id (memory only)
 
@@ -141,6 +142,23 @@ class AppState extends ChangeNotifier {
 
   /// [questRun] if it's for [questId].
   QuestRun? runFor(int questId) => _run?.questId == questId ? _run : null;
+
+  /// The History list: quests that were finished or given up, newest first.
+  /// Not ones never started / left behind for a new quest (those stay in the
+  /// database but aren't shown), and not the one you're doing right now.
+  List<QuestRecord> get historyQuests => [
+        for (final q in _quests)
+          if (q.status != QuestStatus.suggested && runFor(q.id) == null) q,
+      ];
+
+  /// Time recorded on a given-up quest - Resume carries on from here.
+  Duration recordedTime(int questId) {
+    final paused = _pausedRuns[questId];
+    if (paused != null) return paused.elapsed(clock());
+    final matches = _quests.where((q) => q.id == questId);
+    final minutes = matches.isEmpty ? 0 : (matches.first.feedback?.timeLoggedMinutes ?? 0);
+    return Duration(minutes: minutes);
+  }
 
   /// Notes and photos for a quest, oldest first.
   List<JournalEntry> journal(int questId) => List.unmodifiable(_journals[questId] ?? const <JournalEntry>[]);
@@ -210,6 +228,7 @@ class AppState extends ChangeNotifier {
       _completedCount = 0;
       _activeQuestId = null;
       _run = null;
+      _pausedRuns = {};
       _journals = {};
       _rewards = null;
       _streak = null;
@@ -237,6 +256,10 @@ class AppState extends ChangeNotifier {
     _activeQuestId = (m['active_quest'] as num?)?.toInt();
     final run = m['quest_run'];
     _run = run is Map<String, dynamic> ? QuestRun.fromJson(run) : null;
+    _pausedRuns = {
+      for (final r in (m['paused_runs'] as List<dynamic>? ?? const []))
+        (r as Map<String, dynamic>)['quest_id'] as int: QuestRun.fromJson(r),
+    };
     _seenPartyQuests = {for (final id in (m['party_seen'] as List<dynamic>? ?? const [])) (id as num).toInt()};
     final rewards = await _cache.read(_key('rewards'));
     _rewards = rewards == null ? null : Rewards.fromJson(jsonDecode(rewards) as Map<String, dynamic>);
@@ -278,6 +301,7 @@ class AppState extends ChangeNotifier {
         'completed': _completedCount,
         'active_quest': _activeQuestId,
         if (_run != null) 'quest_run': _run!.toJson(),
+        'paused_runs': [for (final r in _pausedRuns.values) r.toJson()],
         'party_seen': _seenPartyQuests.toList(),
       }),
       'journal:$id': jsonEncode([for (final list in _journals.values) for (final e in list) e.toJson()]),
@@ -364,6 +388,7 @@ class AppState extends ChangeNotifier {
     _completedCount = 0;
     _activeQuestId = null;
     _run = null;
+    _pausedRuns = {};
     _journals = {};
     _rewards = null;
     _streak = null;
@@ -423,9 +448,15 @@ class AppState extends ChangeNotifier {
     }
     if (feedback.completed && !wasCompleted) _completedCount++;
     if (!feedback.completed && wasCompleted && _completedCount > 0) _completedCount--;
-    // A completed quest leaves the Quest screen (it's in History now).
-    if (feedback.completed && _activeQuestId == questId) _activeQuestId = null;
-    if (_run?.questId == questId) _run = null; // rated - the step-by-step run is over
+    // Finished or given up: it leaves the Quest screen (it's in History now).
+    if (_activeQuestId == questId) _activeQuestId = null;
+    final run = runFor(questId);
+    if (feedback.completed) {
+      _pausedRuns.remove(questId);
+    } else if (run != null) {
+      _pausedRuns[questId] = run.ended ? run : run.end(now, gaveUp: true); // Resume starts from here
+    }
+    if (run != null) _run = null; // rated - this try is over
     _quests = [for (final q in _quests) q.id == questId ? q.withFeedback(feedback, pending: true) : q];
     await _saveCache();
     notifyListeners();
@@ -499,10 +530,30 @@ class AppState extends ChangeNotifier {
   Future<void> resumeQuest() async {
     final run = _run;
     if (run == null || !run.ended) return;
-    _run = run.resumed();
+    _run = run.resumed(clock());
     await _saveCache();
     notifyListeners();
     await startTracking(run.questId);
+  }
+
+  /// "Resume quest" on a given-up quest in History: it becomes the quest
+  /// you're doing (off History until you finish or give up again), at the
+  /// step you stopped, with the clock starting from the time recorded so far.
+  /// Leaves any other quest you hadn't finished.
+  Future<void> resumeGivenUp(int questId) async {
+    final matches = _quests.where((q) => q.id == questId);
+    if (matches.isEmpty || matches.first.status == QuestStatus.completed) return;
+    await _dropRunUnless(questId);
+    final paused = _pausedRuns[questId]; // kept until it's rated again, in case this try is left behind
+    final steps = matches.first.quest.steps.length;
+    _run = paused != null
+        ? paused.resumed(clock())
+        : QuestRun(questId: questId, startedAt: clock(), priorSeconds: recordedTime(questId).inSeconds);
+    if (_run!.step >= steps && steps > 0) _run = _run!.atStep(steps - 1);
+    _activeQuestId = questId;
+    await _saveCache();
+    notifyListeners();
+    await startTracking(questId);
   }
 
   Future<void> _dropRunUnless(int questId) async {
@@ -706,7 +757,11 @@ class AppState extends ChangeNotifier {
       _addEntry(JournalEntry(clientId: _newClientId(), questId: questId, kind: 'photo', text: caption.trim(),
           mime: mime, localImageBase64: base64Encode(bytes), createdAt: DateTime.now(), pending: true, step: step));
 
+  /// A completed quest's log is locked (read-only).
+  bool _logLocked(int questId) => _quests.any((q) => q.id == questId && q.status == QuestStatus.completed);
+
   Future<void> _addEntry(JournalEntry entry) async {
+    if (_logLocked(entry.questId)) return;
     _journals.putIfAbsent(entry.questId, () => []).add(entry);
     _outbox.add({'type': 'log', 'quest_id': entry.questId, 'client_id': entry.clientId});
     await _saveCache();
@@ -715,6 +770,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> deleteJournalEntry(JournalEntry entry) async {
+    if (_logLocked(entry.questId)) return;
     _journals[entry.questId]?.removeWhere((e) => e.clientId == entry.clientId);
     _outbox.removeWhere((op) => op['type'] == 'log' && op['client_id'] == entry.clientId);
     // Always tell the server: the upload may already be on its way. Deleting

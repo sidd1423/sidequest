@@ -134,16 +134,16 @@ class _FriendTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final stats = <String>[
-      if (friend.levelName.isNotEmpty) friend.levelName,
-      '${friend.completed} ${friend.completed == 1 ? 'quest' : 'quests'}',
-      if (friend.currentStreak > 0) '🔥 ${friend.currentStreak}',
+      '${friend.questsThisWeek} ${friend.questsThisWeek == 1 ? 'quest' : 'quests'} this week',
+      '${friend.minutesToday} min today',
+      '🔥 ${friend.currentStreak} day streak',
     ];
     return ListTile(
       key: Key('friend_${friend.userId}'),
       contentPadding: EdgeInsets.zero,
       leading: _Avatar(person: friend),
       title: Text(friend.displayName),
-      subtitle: Text(stats.join(' · ')),
+      subtitle: Text(stats.join(' · '), key: Key('friend_stats_${friend.userId}')),
       trailing: PopupMenuButton<String>(
         key: Key('friend_menu_${friend.userId}'),
         tooltip: 'More',

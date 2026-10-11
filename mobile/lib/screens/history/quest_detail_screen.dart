@@ -31,7 +31,7 @@ class QuestDetailScreen extends StatelessWidget {
               key: const Key('quest_detail_screen'),
               padding: const EdgeInsets.all(16),
               children: [
-                QuestCard(quest: record.quest),
+                QuestCard(quest: record.quest, party: record.party),
                 const SizedBox(height: 16),
                 QuestJournal(questId: record.id),
                 const SizedBox(height: 16),

@@ -11,7 +11,7 @@ straight away.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -62,7 +62,9 @@ class Person(BaseModel):
 
 class Friend(Person):
     since: datetime
-    completed: int = 0  # quests completed
+    completed: int = 0  # quests completed (all time)
+    quests_this_week: int = 0  # completed since Monday (viewer's time zone)
+    minutes_today: int = 0  # time logged on quests today
     points: int = 0
     level_name: str = ""
     current_streak: int = 0
@@ -91,13 +93,30 @@ def _person(user_id: str) -> Person | None:
     return Person(user_id=user.id, name=user.name, email=user.email) if user else None
 
 
-def _summary(person: Person, since: str) -> Friend:
+def week_and_today(user_id: str, tz_offset_minutes: int = 0, today=None) -> tuple[int, int]:
+    """(quests completed since Monday, minutes logged today) in that time zone."""
+    from . import streak
+
+    today = today or streak.local_today(tz_offset_minutes)
+    monday = today - timedelta(days=today.weekday())
+    week = minutes = 0
+    for _, _, fb, when in db.feedback_rows(user_id):  # when = completed (or rated) time
+        day = streak.local_day(when, tz_offset_minutes)
+        if fb.completed and monday <= day <= today:
+            week += 1
+        if day == today:
+            minutes += fb.time_logged_minutes or 0
+    return week, minutes
+
+
+def _summary(person: Person, since: str, tz_offset_minutes: int = 0) -> Friend:
     friend = Friend(**person.model_dump(), since=since)
     try:  # best effort - a friend's stats never break the list
         from . import rewards
 
         friend.completed = db.quest_stats(person.user_id)["completed"]
-        r = rewards.compute(person.user_id)
+        friend.quests_this_week, friend.minutes_today = week_and_today(person.user_id, tz_offset_minutes)
+        r = rewards.compute(person.user_id, tz_offset_minutes=tz_offset_minutes)
         friend.points, friend.level_name, friend.current_streak = r.points, r.level_name, r.current_streak
     except Exception as exc:
         log.warning("Couldn't load stats for friend %s: %s", person.user_id, exc)
@@ -179,7 +198,7 @@ def remove(user_id: str, friend_id: str) -> None:
         conn.execute("DELETE FROM friendships WHERE id = ?", (row["id"],))
 
 
-def list_for(user_id: str) -> FriendsOut:
+def list_for(user_id: str, tz_offset_minutes: int = 0) -> FriendsOut:
     with db.connect() as conn:
         conn.executescript(SCHEMA)
         rows = conn.execute(
@@ -195,7 +214,7 @@ def list_for(user_id: str) -> FriendsOut:
         if person is None:  # account gone
             continue
         if r["status"] == "accepted":
-            friends.append(_summary(person, r["accepted_at"] or r["created_at"]))
+            friends.append(_summary(person, r["accepted_at"] or r["created_at"], tz_offset_minutes))
         elif r["requester_id"] == user_id:
             outgoing.append(FriendRequest(request_id=r["id"], person=person, created_at=r["created_at"]))
         else:

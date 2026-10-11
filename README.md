@@ -83,7 +83,12 @@ The backend log prints the learned taste on each generation.
 | GET    | `/users/{user_id}/quests` | List the user's quests, newest first |
 | GET    | `/users/{user_id}/rewards` | Points, level, streaks, badges and recent points (rules in `backend/rewards.py`) |
 | GET    | `/users/{user_id}/streak?tz_offset_minutes=-240` | Duolingo-style daily streak: current/best, today's status, freezes, calendar days (rules in `backend/streak.py`) |
-| GET    | `/users/{user_id}/friends` | Friends (with stats), incoming and outgoing friend requests |
+| GET    | `/users/{user_id}/friends?tz_offset_minutes=-240` | Friends (quests this week, minutes today, streak, level), incoming and outgoing friend requests |
+| GET    | `/users/{user_id}/parties` | Group quests you host, joined or are invited to |
+| POST   | `/users/{user_id}/parties` | Invite friends to a group quest: `{"friend_ids": [...], "settings": {...}}` |
+| POST   | `/users/{user_id}/parties/{id}/join` · `/decline` | Answer a group quest invite (joining after it started gives you the quest too) |
+| POST   | `/users/{user_id}/parties/{id}/start` | Host: generate ONE quest for everyone who joined (each gets a copy) |
+| DELETE | `/users/{user_id}/parties/{id}` | Host: cancel before it starts |
 | POST   | `/users/{user_id}/friends/requests` | Send a friend request: `{"email": ...}` (their account email) |
 | POST   | `/users/{user_id}/friends/requests/{id}/accept` · `/decline` | Answer a request sent to you |
 | DELETE | `/users/{user_id}/friends/requests/{id}` · `/users/{user_id}/friends/{friend_id}` | Cancel a request you sent · unfriend |

@@ -40,6 +40,7 @@ class HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     // Fresh points every time the Rewards tab opens.
     if (index == HomeTab.rewards.index) AppScope.read(context).loadRewards();
     if (index == HomeTab.friends.index) AppScope.read(context).loadFriends();
+    if (index == HomeTab.quest.index) AppScope.read(context).loadParties();
   }
 
   @override
@@ -62,6 +63,7 @@ class HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final requests = AppScope.of(context).incomingFriendRequests;
+    final invites = AppScope.of(context).partyInvites;
     return Scaffold(
       body: Column(
         children: [
@@ -90,9 +92,19 @@ class HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         selectedIndex: _index,
         onDestinationSelected: _select,
         destinations: [
-          const NavigationDestination(
-            icon: Icon(Icons.explore_outlined),
-            selectedIcon: Icon(Icons.explore),
+          NavigationDestination(
+            // Badge = group quest invites waiting for you.
+            icon: Badge(
+              key: const Key('quest_badge'),
+              isLabelVisible: invites > 0,
+              label: Text('$invites'),
+              child: const Icon(Icons.explore_outlined),
+            ),
+            selectedIcon: Badge(
+              isLabelVisible: invites > 0,
+              label: Text('$invites'),
+              child: const Icon(Icons.explore),
+            ),
             label: 'Quest',
           ),
           const NavigationDestination(

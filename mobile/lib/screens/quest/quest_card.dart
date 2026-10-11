@@ -1,13 +1,18 @@
 import 'package:flutter/material.dart';
 
 import '../../models/generated_quest.dart';
+import '../../models/party.dart';
 import '../../models/preference_options.dart';
+import 'party_section.dart' show PartyMembers;
 
 /// The generated quest: title, summary, quick facts, steps and notes.
 class QuestCard extends StatelessWidget {
-  const QuestCard({super.key, required this.quest});
+  const QuestCard({super.key, required this.quest, this.party});
 
   final GeneratedQuest quest;
+
+  /// Set for a group quest: who it's for and who's in.
+  final PartyTag? party;
 
   @override
   Widget build(BuildContext context) {
@@ -24,6 +29,24 @@ class QuestCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(quest.title, style: theme.textTheme.titleLarge),
+            if (party != null) ...[
+              const SizedBox(height: 8),
+              Row(
+                key: const Key('group_quest_banner'),
+                children: [
+                  Icon(Icons.groups, color: theme.colorScheme.primary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Group quest for ${party!.size} people · ${party!.joined} in',
+                      style: theme.textTheme.titleSmall?.copyWith(color: theme.colorScheme.primary),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              PartyMembers(members: party!.members),
+            ],
             const SizedBox(height: 8),
             Text(quest.summary),
             const SizedBox(height: 12),

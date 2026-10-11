@@ -1044,4 +1044,144 @@ void main() {
       expect(find.text('Sending a friend request needs a connection.'), findsOneWidget);
     });
   });
+  group('Friend stats and group quests', () {
+    Future<AppState> startAs(WidgetTester tester, String userId) async {
+      useTallScreen(tester);
+      await secure.write('session', jsonEncode(backend.sessionFor(userId)));
+      final state = newState();
+      await state.restore();
+      await state.sync();
+      await tester.pumpWidget(SidequestApp(state: state));
+      await tester.pumpAndSettle();
+      return state;
+    }
+
+    String addPerson(String email, String name) =>
+        backend.addUser(email: email, name: name, prefs: Map.of(savedPrefs))['id'] as String;
+
+    testWidgets('friends show quests this week, minutes today and their streak', (tester) async {
+      final me = addPerson('me@example.com', 'Me');
+      final sam = addPerson('sam@example.com', 'Sam');
+      backend.addFriendship(me, sam, accepted: true);
+      backend.friendStats[sam] = {'quests_this_week': 3, 'minutes_today': 25, 'current_streak': 4};
+      await startAs(tester, me);
+      await tapAndSettle(tester, navItem('Friends'));
+      expect(textOf(tester, 'friend_stats_$sam'), '3 quests this week · 25 min today · 🔥 4 day streak');
+      expect(backend.requests, contains('GET /users/$me/friends'));
+    });
+
+    testWidgets('invite a friend, they join, start: both get the same quest', (tester) async {
+      final me = addPerson('me@example.com', 'Me');
+      final sam = addPerson('sam@example.com', 'Sam');
+      final ria = addPerson('ria@example.com', 'Ria');
+      backend.addFriendship(me, sam, accepted: true);
+      backend.addFriendship(ria, me, accepted: true);
+      final state = await startAs(tester, me);
+
+      await tapAndSettle(tester, find.byKey(const Key('minutes_20')));
+      await tapAndSettle(tester, find.byKey(const Key('invite_friends_button')));
+      expect(find.byKey(const Key('invite_friends_dialog')), findsOneWidget);
+      final send = find.byKey(const Key('send_party_invites'));
+      expect(tester.widget<FilledButton>(send).onPressed, isNull); // nobody picked yet
+      await tapAndSettle(tester, find.byKey(Key('invite_$sam')));
+      await tapAndSettle(tester, find.byKey(Key('invite_$ria')));
+      expect(find.text('Send 2 invites'), findsOneWidget);
+      await tapAndSettle(tester, send);
+
+      final party = backend.parties.single;
+      expect(party['members'], {me: 'joined', sam: 'invited', ria: 'invited'});
+      expect((party['settings'] as Map)['duration_minutes'], 20); // this quest's settings
+      final pid = party['id'];
+      expect(find.byKey(Key('party_$pid')), findsOneWidget);
+      expect(find.text('Waiting for friends to join...'), findsOneWidget);
+      expect(tester.widget<FilledButton>(find.byKey(Key('start_party_$pid'))).onPressed, isNull);
+      expect(find.byKey(Key('member_${sam}_invited')), findsOneWidget);
+
+      // Sam joins on his phone; refresh shows it.
+      (party['members'] as Map<String, dynamic>)[sam] = 'joined';
+      await tapAndSettle(tester, find.byKey(const Key('refresh_parties')));
+      expect(find.byKey(Key('member_${sam}_joined')), findsOneWidget);
+
+      await tapAndSettle(tester, find.byKey(Key('start_party_$pid')));
+      expect(find.text('Group quest started!'), findsOneWidget);
+      expect(find.byKey(Key('party_$pid')), findsNothing); // it's your quest now
+      final card = find.byKey(const Key('quest_card'));
+      expect(find.descendant(of: card, matching: find.text('Group Quest #$pid')), findsOneWidget);
+      expect(find.text('Group quest for 2 people · 2 in'), findsOneWidget);
+      expect(find.byKey(Key('member_${ria}_invited')), findsOneWidget); // shows who's in
+      expect(state.activeQuest!.party!.size, 2);
+      // Same quest for Sam, his own copy.
+      expect(backend.quests[sam]!.single['quest']['title'], 'Group Quest #$pid');
+      expect(backend.quests[sam]!.single['id'], isNot(state.activeQuest!.id));
+    });
+
+    testWidgets('an invite shows a badge; joining, then the host starts, puts the quest on your screen',
+        (tester) async {
+      final me = addPerson('me@example.com', 'Me');
+      final host = addPerson('host@example.com', 'Hana');
+      backend.addFriendship(host, me, accepted: true);
+      backend.parties.add({
+        'id': 7, 'host': host, 'status': 'open', 'members': <String, dynamic>{host: 'joined', me: 'invited'},
+        'quests': <String, dynamic>{}, 'title': null, 'size': null, 'settings': null,
+      });
+      final state = await startAs(tester, me);
+      await tapAndSettle(tester, navItem('History')); // badge shows while another tab is selected
+      expect(tester.widget<Badge>(find.byKey(const Key('quest_badge'))).isLabelVisible, isTrue);
+      await tapAndSettle(tester, navItem('Quest'));
+
+      expect(find.text('Hana invited you to a group quest'), findsOneWidget);
+      await tapAndSettle(tester, find.byKey(const Key('join_party_7')));
+      expect(find.text("You're in Hana's group quest"), findsOneWidget);
+      expect(find.byKey(const Key('join_party_7')), findsNothing);
+      expect(state.partyInvites, 0);
+
+      // Hana starts it on her phone.
+      final p = backend.parties.single;
+      p['status'] = 'started';
+      p['title'] = 'Duo Bench Hunt';
+      p['size'] = 2;
+      final copy = backend.addQuest(me, title: 'Duo Bench Hunt');
+      (p['quests'] as Map<String, dynamic>)[me] = copy['id'];
+      await tapAndSettle(tester, find.byKey(const Key('refresh_parties')));
+
+      expect(state.activeQuest?.id, copy['id']);
+      expect(find.descendant(of: find.byKey(const Key('quest_card')), matching: find.text('Duo Bench Hunt')),
+          findsOneWidget);
+      expect(find.byKey(const Key('group_quest_banner')), findsOneWidget);
+    });
+
+    testWidgets('declining an invite removes it', (tester) async {
+      final me = addPerson('me@example.com', 'Me');
+      final host = addPerson('host@example.com', 'Hana');
+      backend.parties.add({
+        'id': 3, 'host': host, 'status': 'open', 'members': <String, dynamic>{host: 'joined', me: 'invited'},
+        'quests': <String, dynamic>{}, 'title': null, 'size': null, 'settings': null,
+      });
+      await startAs(tester, me);
+      await tapAndSettle(tester, find.byKey(const Key('decline_party_3')));
+      expect(find.byKey(const Key('party_3')), findsNothing);
+      expect((backend.parties.single['members'] as Map)[me], 'declined');
+    });
+
+    testWidgets('inviting with no friends points to the Friends tab', (tester) async {
+      await startAs(tester, addPerson('me@example.com', 'Me'));
+      await tapAndSettle(tester, find.byKey(const Key('invite_friends_button')));
+      await tapAndSettle(tester, find.byKey(const Key('go_to_friends')));
+      expect(selectedTab(tester), 3);
+      expect(backend.parties, isEmpty);
+    });
+
+    testWidgets('the host can cancel before it starts', (tester) async {
+      final me = addPerson('me@example.com', 'Me');
+      final sam = addPerson('sam@example.com', 'Sam');
+      backend.parties.add({
+        'id': 5, 'host': me, 'status': 'open', 'members': <String, dynamic>{me: 'joined', sam: 'invited'},
+        'quests': <String, dynamic>{}, 'title': null, 'size': null, 'settings': null,
+      });
+      await startAs(tester, me);
+      await tapAndSettle(tester, find.byKey(const Key('cancel_party_5')));
+      expect(find.byKey(const Key('party_5')), findsNothing);
+      expect(backend.parties, isEmpty);
+    });
+  });
 }

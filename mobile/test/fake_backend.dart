@@ -23,6 +23,14 @@ class FakeBackend {
   final streakOverride = <String, Map<String, dynamic>>{};
   final streakFreezes = <String, int>{}; // bought, per user
 
+  /// Group quests: {id, host, status open|started, members: {userId: status}, quests: {userId: questId},
+  /// title, size} - like backend/parties.py.
+  final parties = <Map<String, dynamic>>[];
+  int _nextParty = 1;
+
+  /// Stats the fake returns for a friend (user id -> {quests_this_week, minutes_today, current_streak}).
+  final friendStats = <String, Map<String, dynamic>>{};
+
   /// {id, from, to, status: pending|accepted} - like backend/friends.py.
   final friendships = <Map<String, dynamic>>[];
   int _nextFriendship = 1;
@@ -196,6 +204,7 @@ class FakeBackend {
       return _json(_streak(userId));
     }
     if (segments[2] == 'friends') return _friendsRoute(request, segments, userId, body);
+    if (segments[2] == 'parties') return _partiesRoute(request, segments, userId, body);
     if (segments[2] == 'stats') {
       final list = quests[userId] ?? [];
       return _json({
@@ -250,7 +259,7 @@ class FakeBackend {
       return p == null ? _error(404, 'No preferences saved for this user') : _json({...p, 'user_id': userId});
     }
     if (segments[2] == 'quests' && segments.length == 3) {
-      if (request.method == 'GET') return _json(quests[userId] ?? []);
+      if (request.method == 'GET') return _json([for (final q in quests[userId] ?? []) _withParty(q)]);
       if (preferences[userId] == null) return _error(404, 'Save preferences before generating a quest');
       final s = (body as Map<String, dynamic>?) ?? const {};
       lastQuestSettings = s;
@@ -289,6 +298,109 @@ class FakeBackend {
 }
 
 extension on FakeBackend {
+  Map<String, dynamic> _withParty(Map<String, dynamic> q) {
+    for (final p in parties) {
+      if ((p['quests'] as Map<String, dynamic>).containsValue(q['id'])) {
+        final members = p['members'] as Map<String, dynamic>;
+        return {
+          ...q,
+          'party': {
+            'party_id': p['id'],
+            'host_id': p['host'],
+            'size': p['size'],
+            'members': [
+              for (final e in members.entries) {'user_id': e.key, 'name': users[e.key]!['name'], 'status': e.value},
+            ],
+          },
+        };
+      }
+    }
+    return q;
+  }
+
+  Map<String, dynamic> _partyJson(Map<String, dynamic> p, String viewer) {
+    final members = p['members'] as Map<String, dynamic>;
+    final quests = p['quests'] as Map<String, dynamic>;
+    return {
+      'id': p['id'],
+      'host_id': p['host'],
+      'host_name': users[p['host']]!['name'],
+      'status': p['status'],
+      'created_at': '2026-10-01T00:00:00Z',
+      'members': [
+        for (final e in members.entries)
+          {'user_id': e.key, 'name': users[e.key]!['name'], 'email': users[e.key]!['email'], 'status': e.value,
+           'is_host': e.key == p['host']},
+      ],
+      'joined': members.values.where((s) => s == 'joined').length,
+      'size': p['size'],
+      'my_status': viewer == p['host'] ? 'host' : members[viewer],
+      'my_quest_id': quests[viewer],
+      'quest_title': p['title'],
+      'settings': p['settings'],
+    };
+  }
+
+  http.Response _partiesRoute(http.Request request, List<String> segments, String userId, dynamic body) {
+    // GET /users/{id}/parties
+    if (segments.length == 3 && request.method == 'GET') {
+      return _json([
+        for (final p in parties.reversed)
+          if ((p['members'] as Map<String, dynamic>).containsKey(userId) &&
+              (p['members'] as Map<String, dynamic>)[userId] != 'declined')
+            _partyJson(p, userId),
+      ]);
+    }
+    // POST /users/{id}/parties {friend_ids, settings}
+    if (segments.length == 3 && request.method == 'POST') {
+      final b = body as Map<String, dynamic>;
+      final p = <String, dynamic>{
+        'id': _nextParty++,
+        'host': userId,
+        'status': 'open',
+        'members': <String, dynamic>{userId: 'joined', for (final f in b['friend_ids'] as List<dynamic>) f as String: 'invited'},
+        'quests': <String, dynamic>{},
+        'title': null,
+        'size': null,
+        'settings': b['settings'],
+      };
+      parties.add(p);
+      return _json(_partyJson(p, userId), 201);
+    }
+    final matches = parties.where((p) => p['id'] == int.parse(segments[3]) &&
+        (p['members'] as Map<String, dynamic>).containsKey(userId));
+    if (matches.isEmpty) return _error(404, 'Group quest not found');
+    final p = matches.first;
+    final members = p['members'] as Map<String, dynamic>;
+    if (segments.length == 4 && request.method == 'DELETE') {
+      if (p['host'] != userId) return _error(403, 'Only the host can cancel the group quest');
+      parties.remove(p);
+      return http.Response('', 204);
+    }
+    final action = segments[4];
+    if (action == 'join' || action == 'decline') {
+      if (members[userId] != 'invited') return _error(409, 'You already ${members[userId]} this group quest');
+      members[userId] = action == 'join' ? 'joined' : 'declined';
+      if (action == 'join' && p['status'] == 'started') {
+        (p['quests'] as Map<String, dynamic>)[userId] = addQuest(userId, title: p['title'] as String)['id'];
+      }
+      return _json(_partyJson(p, userId));
+    }
+    if (action == 'start') {
+      if (p['host'] != userId) return _error(403, 'Only the host can start the group quest');
+      final joined = [for (final e in members.entries) if (e.value == 'joined') e.key];
+      if (joined.length < 2) return _error(409, 'Wait until at least one friend has joined');
+      p['status'] = 'started';
+      p['title'] = 'Group Quest #${p['id']}';
+      p['size'] = joined.length;
+      for (final m in joined) {
+        (p['quests'] as Map<String, dynamic>)[m] = addQuest(m, title: p['title'] as String)['id'];
+      }
+      return _json(_partyJson(p, userId));
+    }
+    return _error(404, 'Not found');
+  }
+
   Map<String, dynamic> _person(String id) =>
       {'user_id': id, 'name': users[id]!['name'], 'email': users[id]!['email']};
 
@@ -314,6 +426,9 @@ extension on FakeBackend {
               'points': 0,
               'level_name': 'Homebody',
               'current_streak': 0,
+              'quests_this_week': 0,
+              'minutes_today': 0,
+              ...?friendStats[other(f)],
             },
         ],
         'incoming': [

@@ -323,6 +323,21 @@ class FeedbackEntry(FeedbackIn):
     created_at: datetime
 
 
+class PartyMemberTag(BaseModel):
+    user_id: str
+    name: str
+    status: str  # invited | joined | declined
+
+
+class PartyTag(BaseModel):
+    """Set on quests that are part of a group quest (backend/parties.py)."""
+
+    party_id: int
+    host_id: str
+    size: int  # people the quest was made for (joined when it started)
+    members: list[PartyMemberTag]
+
+
 class QuestRecord(BaseModel):
     """A stored quest plus its lifecycle metadata."""
 
@@ -333,6 +348,7 @@ class QuestRecord(BaseModel):
     feedback: FeedbackIn | None = None
     created_at: datetime
     model: str = ""
+    party: PartyTag | None = None  # group quest with friends
 
 
 class PastQuest(BaseModel):

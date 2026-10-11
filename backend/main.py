@@ -14,13 +14,15 @@ from dotenv import load_dotenv
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import auth, db, friends, history, journal, library, retrieval, rewards, streak, taste as taste_mod
+from . import auth, db, friends, history, journal, parties, library, retrieval, rewards, streak, taste as taste_mod
 from .llm import GemmaClient, LLMClient, LLMError
 from .quest_generator import generate_quest
 from .schemas import (
     FeedbackEntry,
     FeedbackIn,
+    GroupSize,
     PreferencesIn,
+    Quest,
     PreferencesOut,
     QuestExample,
     QuestRecord,
@@ -39,6 +41,7 @@ async def lifespan(_: FastAPI):
     journal.init_journal()
     streak.init_streaks()
     friends.init_friends()
+    parties.init_parties()
     if not os.getenv("GEMMA_API_KEY") and "googleapis" in os.getenv(
         "GEMMA_BASE_URL", "https://generativelanguage.googleapis.com"
     ):
@@ -115,7 +118,7 @@ def delete_me(confirm: auth.DeleteAccountIn, user: auth.UserOut = Depends(auth.c
     if not auth.password_matches(user.id, confirm.password):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Wrong password")
     db.delete_user_data(user.id)
-    for cleanup in (library.delete_user, history.delete_user, friends.delete_user):
+    for cleanup in (library.delete_user, history.delete_user, friends.delete_user, parties.delete_user):
         try:
             cleanup(user.id)
         except Exception as exc:
@@ -199,6 +202,19 @@ def create_quest(
 
     Optional body: this quest's minutes / difficulty / energy / distance
     (picked right before each quest in the app); missing ones come from the profile."""
+    quest = generate_for(user_id, settings, llm, retriever)
+    return save_generated(user_id, quest, getattr(llm, "model", ""))
+
+
+def generate_for(
+    user_id: str,
+    settings: QuestSettings | None,
+    llm: LLMClient,
+    retriever: retrieval.Retriever | None,
+    party_size: int | None = None,
+) -> Quest:
+    """One quest for this user's preferences + history (+ this quest's settings).
+    party_size: a group quest for that many friends (see backend/parties.py)."""
     profile = db.get_preferences(user_id)
     if profile is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Save preferences before generating a quest")
@@ -206,6 +222,9 @@ def create_quest(
     prefs = PreferencesIn.model_validate(profile.model_dump(exclude={"user_id", "created_at", "updated_at"}))
     if settings is not None:
         prefs = settings.apply(prefs)
+    if party_size and party_size >= 2:
+        group = GroupSize.PAIR if party_size == 2 else GroupSize.SMALL_GROUP if party_size <= 5 else GroupSize.LARGE_GROUP
+        prefs = QuestSettings(group_size=group).apply(prefs)
     # Feedback is empty on a user's first run; examples come from the Tiger
     # library (so even new users get them) or, failing that, past liked quests.
     feedback = db.feedback_history(user_id) or None
@@ -222,10 +241,15 @@ def create_quest(
         recent = []
 
     try:
-        quest = generate_quest(prefs, examples, feedback, recent_quests=recent, taste=taste, llm=llm)
+        return generate_quest(prefs, examples, feedback, recent_quests=recent, taste=taste, llm=llm,
+                              party_size=party_size)
     except LLMError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-    record = db.add_quest(user_id, quest, model=getattr(llm, "model", ""))
+
+
+def save_generated(user_id: str, quest: Quest, model: str) -> QuestRecord:
+    """Store a generated quest for this user (+ the quest library and their history)."""
+    record = db.add_quest(user_id, quest, model=model)
     try:  # also keep it in the quest library alongside the seeded quests
         library.add_generated(record.id, user_id, quest, model=record.model)
     except Exception as exc:
@@ -239,7 +263,7 @@ def create_quest(
 
 @app.get("/users/{user_id}/quests", response_model=list[QuestRecord])
 def read_quests(user_id: str = UserId, limit: int = Query(20, ge=1, le=100)) -> list[QuestRecord]:
-    return db.list_quests(user_id, limit)
+    return parties.attach(db.list_quests(user_id, limit))
 
 
 @app.post("/users/{user_id}/quests/{quest_id}/feedback", response_model=QuestRecord)
@@ -247,6 +271,7 @@ def give_feedback(feedback: FeedbackIn, quest_id: int, user_id: str = UserId) ->
     record = db.set_feedback(user_id, quest_id, feedback)
     if record is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Quest not found")
+    parties.attach([record])
     try:
         library.record_feedback(quest_id, feedback)
     except Exception as exc:
@@ -333,9 +358,10 @@ def buy_streak_freeze(user_id: str = UserId, tz_offset_minutes: int = TzOffset) 
 # ---------------------------------------------------------------------------
 
 @app.get("/users/{user_id}/friends", response_model=friends.FriendsOut)
-def read_friends(user_id: str = UserId) -> friends.FriendsOut:
-    """Your friends (with a few stats), requests waiting for you, and requests you sent."""
-    return friends.list_for(user_id)
+def read_friends(user_id: str = UserId, tz_offset_minutes: int = TzOffset) -> friends.FriendsOut:
+    """Your friends (with stats: quests this week, minutes today, streak - in your
+    time zone), requests waiting for you, and requests you sent."""
+    return friends.list_for(user_id, tz_offset_minutes)
 
 
 @app.post("/users/{user_id}/friends/requests", response_model=friends.RequestResult,
@@ -364,3 +390,63 @@ def cancel_friend_request(request_id: int, user_id: str = UserId) -> None:
 @app.delete("/users/{user_id}/friends/{friend_id}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_friend(friend_id: str, user_id: str = UserId) -> None:
     friends.remove(user_id, friend_id)
+
+
+
+# ---------------------------------------------------------------------------
+# Group quests with friends (see backend/parties.py)
+# ---------------------------------------------------------------------------
+
+@app.get("/users/{user_id}/parties", response_model=list[parties.PartyOut])
+def read_parties(user_id: str = UserId) -> list[parties.PartyOut]:
+    """Group quests you host, joined or are invited to (open, or started in the last day)."""
+    return parties.list_for(user_id)
+
+
+@app.post("/users/{user_id}/parties", response_model=parties.PartyOut, status_code=status.HTTP_201_CREATED)
+def create_party(body: parties.PartyIn, user_id: str = UserId) -> parties.PartyOut:
+    """Invite friends to a group quest. The quest is generated when you start it."""
+    if db.get_preferences(user_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Save preferences before starting a group quest")
+    return parties.create(user_id, body)
+
+
+@app.post("/users/{user_id}/parties/{party_id}/join", response_model=parties.PartyOut)
+def join_party(party_id: int, user_id: str = UserId) -> parties.PartyOut:
+    """Join. If it already started, you get your copy of the quest straight away."""
+    party, quest_json, _ = parties.respond(user_id, party_id, join=True)
+    if quest_json:
+        record = save_generated(user_id, Quest.model_validate_json(quest_json), "group")
+        parties.set_quest_id(party_id, user_id, record.id)
+        party = parties.get(party_id, user_id)
+    return party
+
+
+@app.post("/users/{user_id}/parties/{party_id}/decline", response_model=parties.PartyOut)
+def decline_party(party_id: int, user_id: str = UserId) -> parties.PartyOut:
+    return parties.respond(user_id, party_id, join=False)[0]
+
+
+@app.post("/users/{user_id}/parties/{party_id}/start", response_model=parties.PartyOut)
+def start_party(
+    party_id: int,
+    user_id: str = UserId,
+    llm: LLMClient = Depends(get_llm),
+    retriever: retrieval.Retriever | None = Depends(get_retriever),
+) -> parties.PartyOut:
+    """Host only: generate ONE quest for everyone who joined and give each of them a copy."""
+    joined, settings = parties.check_can_start(user_id, party_id)
+    quest = generate_for(user_id, settings, llm, retriever, party_size=len(joined))
+    if not parties.mark_started(party_id, quest, len(joined)):
+        raise HTTPException(status.HTTP_409_CONFLICT, "This group quest already started")
+    model = getattr(llm, "model", "")
+    for member in joined:
+        record = save_generated(member, quest, model)
+        parties.set_quest_id(party_id, member, record.id)
+    return parties.get(party_id, user_id)
+
+
+@app.delete("/users/{user_id}/parties/{party_id}", status_code=status.HTTP_204_NO_CONTENT)
+def cancel_party(party_id: int, user_id: str = UserId) -> None:
+    """Host only, before it starts."""
+    parties.cancel(user_id, party_id)

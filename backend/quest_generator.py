@@ -107,6 +107,7 @@ def build_prompt(
     feedback_history: Sequence[FeedbackEntry] | None = None,
     recent_quests: Sequence[PastQuest] | None = None,
     taste: Taste | None = None,
+    party_size: int | None = None,
 ) -> str:
     minutes = profile.availability.duration_minutes
     parts = [
@@ -133,6 +134,12 @@ def build_prompt(
         "- Free or nearly free. Concrete, specific actions - not vague advice.",
         "- Suit their surroundings, crowd tolerance and group size.",
     ]
+    if party_size and party_size >= 2:
+        parts += [
+            f"- GROUP QUEST: exactly {party_size} friends will do this quest TOGETHER, at the same time and "
+            f"place. Design it for {party_size} people - everyone takes part (shared goal, turns, or "
+            "complementary roles), and the steps say how the group works together.",
+        ]
 
     if retrieved_examples:
         parts += [
@@ -268,6 +275,7 @@ def generate_quest(
     recent_quests: Sequence[PastQuest] | None = None,
     taste: Taste | None = None,
     llm: LLMClient | None = None,
+    party_size: int | None = None,
 ) -> Quest:
     """Generate one sidequest tailored to `profile`.
 
@@ -277,10 +285,11 @@ def generate_quest(
       recent_quests       the user's last 10 quests from the user history database;
                           the new quest must not repeat them or resemble disliked ones
       taste               patterns learned from ALL the user's feedback (taste.learn_taste)
+      party_size          a group quest for this many friends together (parties.py)
     """
     llm = llm or GemmaClient()
     recent_quests = list(recent_quests or [])
-    prompt = build_prompt(profile, retrieved_examples, feedback_history, recent_quests, taste)
+    prompt = build_prompt(profile, retrieved_examples, feedback_history, recent_quests, taste, party_size)
 
     budget = float(os.getenv("GEMMA_TIME_BUDGET") or DEFAULT_TIME_BUDGET)
     started = time.monotonic()

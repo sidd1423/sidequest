@@ -27,6 +27,8 @@ class Friend extends Person {
     required super.email,
     required this.since,
     this.completed = 0,
+    this.questsThisWeek = 0,
+    this.minutesToday = 0,
     this.points = 0,
     this.levelName = '',
     this.currentStreak = 0,
@@ -34,6 +36,8 @@ class Friend extends Person {
 
   final DateTime since;
   final int completed;
+  final int questsThisWeek; // completed since Monday
+  final int minutesToday; // time logged on quests today
   final int points;
   final String levelName;
   final int currentStreak;
@@ -44,6 +48,8 @@ class Friend extends Person {
         email: json['email'] as String,
         since: DateTime.tryParse(json['since'] as String? ?? '') ?? DateTime.now(),
         completed: (json['completed'] as num?)?.toInt() ?? 0,
+        questsThisWeek: (json['quests_this_week'] as num?)?.toInt() ?? 0,
+        minutesToday: (json['minutes_today'] as num?)?.toInt() ?? 0,
         points: (json['points'] as num?)?.toInt() ?? 0,
         levelName: (json['level_name'] as String?) ?? '',
         currentStreak: (json['current_streak'] as num?)?.toInt() ?? 0,
@@ -54,6 +60,8 @@ class Friend extends Person {
         ...super.toJson(),
         'since': since.toIso8601String(),
         'completed': completed,
+        'quests_this_week': questsThisWeek,
+        'minutes_today': minutesToday,
         'points': points,
         'level_name': levelName,
         'current_streak': currentStreak,

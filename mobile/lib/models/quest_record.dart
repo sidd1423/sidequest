@@ -1,4 +1,5 @@
 import 'generated_quest.dart';
+import 'party.dart';
 
 enum QuestStatus { suggested, completed, skipped }
 
@@ -11,6 +12,7 @@ class QuestRecord {
     this.status = QuestStatus.suggested,
     this.feedback,
     this.feedbackPending = false,
+    this.party,
   });
 
   final int id;
@@ -22,6 +24,9 @@ class QuestRecord {
   /// Feedback was given offline and hasn't reached the server yet.
   final bool feedbackPending;
 
+  /// Set when this is a group quest with friends.
+  final PartyTag? party;
+
   String get title => quest.title;
   int? get rating => feedback?.rating;
 
@@ -32,6 +37,7 @@ class QuestRecord {
         status: f.completed ? QuestStatus.completed : QuestStatus.skipped,
         feedback: f,
         feedbackPending: pending,
+        party: party,
       );
 
   factory QuestRecord.fromJson(Map<String, dynamic> json, {double? distanceKm}) {
@@ -46,6 +52,7 @@ class QuestRecord {
       feedback: fb == null ? null : QuestFeedback.fromJson(fb),
       createdAt: DateTime.tryParse(json['created_at'] as String? ?? '') ?? DateTime.now(),
       feedbackPending: (json['_feedback_pending'] as bool?) ?? false,
+      party: json['party'] == null ? null : PartyTag.fromJson(json['party'] as Map<String, dynamic>),
     );
   }
 
@@ -56,5 +63,6 @@ class QuestRecord {
         'feedback': feedback?.toJson(),
         'created_at': createdAt.toIso8601String(),
         if (feedbackPending) '_feedback_pending': true,
+        if (party != null) 'party': party!.toJson(),
       };
 }

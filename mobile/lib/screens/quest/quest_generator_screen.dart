@@ -9,6 +9,7 @@ import '../../widgets/streak_widgets.dart';
 import '../auth/auth_scaffold.dart' show AuthError;
 import '../streak/streak_celebration_screen.dart';
 import 'quest_card.dart';
+import 'party_section.dart';
 import 'quest_feedback_form.dart';
 
 /// Quest tab (home).
@@ -42,19 +43,21 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
   String? _error;
   final _cardKey = GlobalKey();
 
+  QuestSettings _settings() => QuestSettings(
+        minutes: _minutes,
+        difficulty: _difficulty,
+        energy: _energy.round(),
+        distanceKm: _distanceKm,
+        group: _group,
+      );
+
   Future<void> _generate() async {
     setState(() {
       _generating = true;
       _error = null;
     });
     try {
-      await AppScope.read(context).generateQuest(QuestSettings(
-        minutes: _minutes,
-        difficulty: _difficulty,
-        energy: _energy.round(),
-        distanceKm: _distanceKm,
-        group: _group,
-      ));
+      await AppScope.read(context).generateQuest(_settings());
     } on OfflineException catch (e) {
       if (mounted) setState(() => _error = '${e.message} New quests need a connection - your history still works offline.');
     } on ApiException catch (e) {
@@ -205,11 +208,13 @@ class _QuestGeneratorScreenState extends State<QuestGeneratorScreen> {
             const SizedBox(height: 12),
             AuthError(_error!, key: const Key('generate_error')),
           ],
+          const SizedBox(height: 20),
+          PartySection(settings: _settings),
 
           // --- Result: only after Generate ------------------------------
           if (record != null && quest != null) ...[
             const SizedBox(height: 24),
-            QuestCard(key: _cardKey, quest: quest),
+            QuestCard(key: _cardKey, quest: quest, party: record.party),
             const SizedBox(height: 16),
             QuestJournal(key: ValueKey('journal_${record.id}'), questId: record.id),
             const SizedBox(height: 16),

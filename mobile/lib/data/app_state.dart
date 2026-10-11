@@ -8,6 +8,7 @@ import '../models/account.dart';
 import '../models/friends.dart';
 import '../models/generated_quest.dart';
 import '../models/journal_entry.dart';
+import '../models/party.dart';
 import '../models/profile_preferences.dart';
 import '../models/quest_record.dart';
 import '../models/rewards.dart';
@@ -43,7 +44,7 @@ class AppState extends ChangeNotifier {
   final KeyValueStore _secure;
 
   static const _sessionKey = 'session';
-  static const _cacheNames = ['profile', 'quests', 'outbox', 'meta', 'journal', 'rewards', 'streak', 'friends'];
+  static const _cacheNames = ['profile', 'quests', 'outbox', 'meta', 'journal', 'rewards', 'streak', 'friends', 'parties'];
 
   Session? _session;
   ProfilePreferences? _profile;
@@ -57,6 +58,8 @@ class AppState extends ChangeNotifier {
   Rewards? _rewards;
   StreakInfo? _streak;
   FriendsData _friends = const FriendsData();
+  List<Party> _parties = const [];
+  Set<int> _seenPartyQuests = {}; // group quests already put on the Quest screen
   int? _activeQuestId;
   Map<int, List<JournalEntry>> _journals = {};
   final Map<String, Uint8List> _photoCache = {}; // downloaded photos, by client id (memory only)
@@ -80,6 +83,12 @@ class AppState extends ChangeNotifier {
 
   /// Friends and friend requests (last copy from the server).
   FriendsData get friends => _friends;
+
+  /// Group quests you host, joined or are invited to (newest first).
+  List<Party> get parties => List.unmodifiable(_parties);
+
+  /// Group quest invites waiting for an answer (the badge on the Quest tab).
+  int get partyInvites => _parties.where((p) => p.isInvite).length;
 
   /// Friend requests waiting for you (the badge on the Friends tab).
   int get incomingFriendRequests => _friends.incoming.length;
@@ -156,6 +165,8 @@ class AppState extends ChangeNotifier {
       _rewards = null;
       _streak = null;
       _friends = const FriendsData();
+      _parties = const [];
+      _seenPartyQuests = {};
     }
   }
 
@@ -174,12 +185,17 @@ class AppState extends ChangeNotifier {
     final m = meta == null ? const <String, dynamic>{} : jsonDecode(meta) as Map<String, dynamic>;
     _completedCount = (m['completed'] as num?)?.toInt() ?? 0;
     _activeQuestId = (m['active_quest'] as num?)?.toInt();
+    _seenPartyQuests = {for (final id in (m['party_seen'] as List<dynamic>? ?? const [])) (id as num).toInt()};
     final rewards = await _cache.read(_key('rewards'));
     _rewards = rewards == null ? null : Rewards.fromJson(jsonDecode(rewards) as Map<String, dynamic>);
     final streak = await _cache.read(_key('streak'));
     _streak = streak == null ? null : StreakInfo.fromJson(jsonDecode(streak) as Map<String, dynamic>);
     final friends = await _cache.read(_key('friends'));
     _friends = friends == null ? const FriendsData() : FriendsData.fromJson(jsonDecode(friends) as Map<String, dynamic>);
+    final parties = await _cache.read(_key('parties'));
+    _parties = parties == null
+        ? const []
+        : [for (final p in jsonDecode(parties) as List<dynamic>) Party.fromJson(p as Map<String, dynamic>)];
     final journal = await _cache.read(_key('journal'));
     _journals = {};
     if (journal != null) {
@@ -199,11 +215,16 @@ class AppState extends ChangeNotifier {
       if (_profile != null) 'profile:$id': jsonEncode(_profile!.toJson()),
       'quests:$id': jsonEncode([for (final q in _quests) q.toJson()]),
       'outbox:$id': jsonEncode(_outbox),
-      'meta:$id': jsonEncode({'completed': _completedCount, 'active_quest': _activeQuestId}),
+      'meta:$id': jsonEncode({
+        'completed': _completedCount,
+        'active_quest': _activeQuestId,
+        'party_seen': _seenPartyQuests.toList(),
+      }),
       'journal:$id': jsonEncode([for (final list in _journals.values) for (final e in list) e.toJson()]),
       if (_rewards != null) 'rewards:$id': jsonEncode(_rewards!.toJson()),
       if (_streak != null) 'streak:$id': jsonEncode(_streak!.toJson()),
       'friends:$id': jsonEncode(_friends.toJson()),
+      'parties:$id': jsonEncode([for (final p in _parties) p.toJson()]),
     };
     for (final entry in values.entries) {
       if (_session?.token != session.token) return; // logged out meanwhile - don't write it back
@@ -276,6 +297,8 @@ class AppState extends ChangeNotifier {
     _rewards = null;
     _streak = null;
     _friends = const FriendsData();
+    _parties = const [];
+    _seenPartyQuests = {};
     _photoCache.clear();
     _sessionExpired = false;
     _lastSyncError = null;
@@ -486,7 +509,7 @@ class AppState extends ChangeNotifier {
     final session = _session;
     if (session == null) return;
     try {
-      final json = await _call(() => api.get('/users/${session.account.id}/friends'));
+      final json = await _call(() => api.get('/users/${session.account.id}/friends?$_tz'));
       if (_session?.token != session.token) return;
       _friends = FriendsData.fromJson(json as Map<String, dynamic>);
       await _saveCache();
@@ -532,6 +555,77 @@ class AppState extends ChangeNotifier {
     final userId = _session!.account.id;
     await _call(() => api.delete('/users/$userId/friends/$friendId'));
     await loadFriends();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Group quests with friends (need a connection; the list is cached)
+  // ---------------------------------------------------------------------------
+
+  /// Refresh group quests. A group quest that just started (you're in it)
+  /// becomes the quest on your Quest screen. Offline: keeps the cached copy.
+  Future<void> loadParties({bool pullQuests = true}) async {
+    final session = _session;
+    if (session == null) return;
+    try {
+      final list = await _call(() => api.get('/users/${session.account.id}/parties')) as List<dynamic>;
+      if (_session?.token != session.token) return;
+      _parties = [for (final p in list) Party.fromJson(p as Map<String, dynamic>)];
+      await _showStartedPartyQuests(session, pullQuests: pullQuests);
+      await _saveCache();
+      notifyListeners();
+    } on OfflineException {
+      // keep the cached copy
+    } on ApiException {
+      // keep the cached copy
+    }
+  }
+
+  Future<void> _showStartedPartyQuests(Session session, {required bool pullQuests}) async {
+    final fresh = [
+      for (final p in _parties)
+        if (!p.isOpen && p.myQuestId != null && !_seenPartyQuests.contains(p.myQuestId)) p.myQuestId!,
+    ];
+    if (fresh.isEmpty) return;
+    if (pullQuests && fresh.any((id) => !_quests.any((q) => q.id == id))) {
+      await _refresh(session); // the new quest copy isn't on the device yet
+    }
+    for (final id in fresh) {
+      final matches = _quests.where((q) => q.id == id);
+      if (matches.isEmpty) continue; // try again next time
+      _seenPartyQuests.add(id);
+      if (matches.first.status != QuestStatus.completed) _activeQuestId = id;
+    }
+  }
+
+  /// Invite friends to a group quest with this quest's settings. The quest is
+  /// generated when you start it ([startParty]).
+  Future<Party> createParty(List<String> friendIds, QuestSettings settings) async {
+    await sync(refresh: false); // the server needs your latest preferences
+    final userId = _session!.account.id;
+    final json = await _call(() => api.post('/users/$userId/parties', Party.createBody(friendIds, settings)));
+    final party = Party.fromJson(json as Map<String, dynamic>);
+    await loadParties();
+    return party;
+  }
+
+  Future<void> joinParty(int partyId) => _partyAction(partyId, 'join');
+
+  Future<void> declineParty(int partyId) => _partyAction(partyId, 'decline');
+
+  /// Host only: Gemma makes ONE quest for everyone who joined (takes a while).
+  Future<void> startParty(int partyId) => _partyAction(partyId, 'start', ApiClient.generateTimeout);
+
+  /// Host only, before it starts.
+  Future<void> cancelParty(int partyId) async {
+    final userId = _session!.account.id;
+    await _call(() => api.delete('/users/$userId/parties/$partyId'));
+    await loadParties();
+  }
+
+  Future<void> _partyAction(int partyId, String action, [Duration timeout = ApiClient.defaultTimeout]) async {
+    final userId = _session!.account.id;
+    await _call(() => api.post('/users/$userId/parties/$partyId/$action', null, timeout));
+    await loadParties(); // a started quest lands on the Quest screen
   }
 
   /// A photo's bytes: from the device if we have them, else downloaded once.
@@ -622,6 +716,7 @@ class AppState extends ChangeNotifier {
         await _refresh(session);
         if (stillCurrent()) await loadStreak();
         if (stillCurrent()) await loadFriends();
+        if (stillCurrent()) await loadParties(pullQuests: false);
       }
       if (stillCurrent()) _lastSyncError = dropped;
     } on OfflineException {

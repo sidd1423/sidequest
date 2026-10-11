@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import '../../widgets/brand_mark.dart';
+import '../../widgets/compass_mark.dart';
 
 /// Shared layout for the auth screens: logo, title, centred scrollable form.
 /// No bottom navigation bar - that only appears once signed in.
@@ -32,8 +32,8 @@ class AuthScaffold extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const BrandMark(size: 72),
-                  const SizedBox(height: 12),
+                  const CompassMark(size: 72),
+                  const SizedBox(height: 16),
                   Text(title, textAlign: TextAlign.center, style: theme.textTheme.headlineMedium),
                   const SizedBox(height: 8),
                   Text(

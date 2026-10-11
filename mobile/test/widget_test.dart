@@ -173,6 +173,22 @@ void main() {
       expect(find.byKey(const Key('bottom_nav')), findsNothing);
     });
 
+    testWidgets('compass logo sits above the title on Log in and Sign up, never over it', (tester) async {
+      Future<void> expectCompassAbove(String title) async {
+        final compass = find.byKey(const Key('auth_compass'));
+        expect(compass, findsOneWidget);
+        final box = tester.getRect(compass);
+        expect(box.size, const Size(72, 72));
+        expect(find.byIcon(Icons.explore_outlined), findsOneWidget);
+        expect(box.bottom, lessThan(tester.getRect(find.text(title)).top));
+      }
+
+      await startApp(tester);
+      await expectCompassAbove('Welcome back');
+      await tapAndSettle(tester, find.byKey(const Key('go_to_sign_up')));
+      await expectCompassAbove('Create your account');
+    });
+
     testWidgets('Log in -> Sign up -> back to Log in', (tester) async {
       await startApp(tester);
       await tapAndSettle(tester, find.byKey(const Key('go_to_sign_up')));

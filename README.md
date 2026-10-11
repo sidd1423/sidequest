@@ -1,7 +1,14 @@
 # sidequest
 
+Most days we walk straight past the little things - moss growing in a crack in
+the wall, the way the light hits the street late in the afternoon, a bird that's
+been singing outside the window all week, a shop sign we've never actually read.
+Sidequest is a small nudge to go outside and *notice* them.
+
 Sidequests are quick **5-30 minute things to do outside, right now** - small,
-low-friction nudges to get people out of the house more often. The app tailors
+low-friction prompts that get people out of the house and paying attention to
+what's already around them. They're not about going somewhere special; they're
+about seeing the ordinary places you pass every day a bit more closely. The app tailors
 each one to the user's interests, how much time they have, their energy and
 accessibility needs - and to where they actually are: the live weather, time of
 day and real places nearby are looked up from their location for every quest.
@@ -14,7 +21,6 @@ Streamlit UI (app.py)  ──HTTP/JSON──▶  FastAPI backend (backend/)  ─
         │                                      │
         │                                      ├──▶  Gemma via inference API (backend/llm.py)
         │                                      └──▶  Example-quest library: local SQLite (backend/library.py)
-        │                                                 or Tiger Data pgvector (backend/retrieval.py)
         └──────── shared Pydantic schema (backend/schemas.py) ────────┘
 ```
 
@@ -38,11 +44,10 @@ Streamlit UI (app.py)  ──HTTP/JSON──▶  FastAPI backend (backend/)  ─
   - `feedback_history`: their recent completed/skipped quests with ratings & comments (`db.feedback_history`)
   - Both are empty on a user's first quest, so they're optional.
 - **Example retrieval** `backend/retrieval.py`: turns the user's profile (and
-  quests they loved) into a query, embeds it with `gemini-embedding-001`
-  (768 dims), and pulls the 3 most similar quests from the Tiger Data `quests`
-  table by cosine similarity, preferring ones that fit the user's time. These
-  are passed to Gemma as `retrieved_examples`, so even first-time users get
-  examples. If Tiger isn't configured or is unreachable, it falls back to the
+  quests they loved) into a query and pulls the 3 most similar quests from the
+  local example-quest library (see below), preferring ones that fit the user's
+  time. These are passed to Gemma as `retrieved_examples`, so even first-time
+  users get examples. If the library has nothing suitable, it falls back to the
   user's own top-rated quests.
 - **Gemma client** `backend/llm.py`: calls any OpenAI-compatible
   `/chat/completions` endpoint - Google AI Studio by default, or Ollama/vLLM/etc.
@@ -194,7 +199,7 @@ feedback_at, copied_from_library. Git-ignored (user data).
 
 Gemma gets the 3 example quests most similar to the user's profile.
 
-**Local (default)** - `data/quest_library.db` is created and seeded
+`data/quest_library.db` is created and seeded
 automatically when the backend starts (30 quests from `tiger/seed_quests.json`).
 It is git-ignored because it also stores users' generated quests and feedback. Embeddings come from
 [WordLlama](https://github.com/dleemiller/WordLlama) (256 dims), which runs
@@ -221,24 +226,6 @@ Re-seed after editing `tiger/seed_quests.json` (generated rows are left alone):
 ```powershell
 python -m backend.library
 ```
-
-### Tiger Data (optional)
-
-Setting `TIGER_DATABASE_URL` switches retrieval to Tiger Data instead.
-
-1. Create a Tiger Data service and copy its connection string.
-2. In `.env`, set `TIGER_DATABASE_URL=<connection string>`.
-3. Create the table and load the 30 example quests (`tiger/seed_quests.json`):
-
-   ```powershell
-   python -m tiger.seed           # creates table + HNSW index, embeds and upserts
-   python -m tiger.seed --check   # verify connection / row count
-   ```
-
-   Or run `tiger/schema.sql` in the Tiger console first and use `--skip-schema`.
-   Re-running the seed is safe (upserts on `quest_text`).
-
-Table: `quests(id, quest_text, category, duration_minutes, difficulty, tags text[], embedding vector(768), created_at)`
 
 ## Monitoring with Sentry (optional)
 
@@ -307,7 +294,7 @@ runs when Render stops the server.
    (bucket name), `LITESTREAM_ENDPOINT` (`https://` + the bucket endpoint),
    `LITESTREAM_ACCESS_KEY_ID` (keyID), `LITESTREAM_SECRET_ACCESS_KEY`
    (applicationKey), `NOMINATIM_EMAIL` (your email), and
-   optionally `SERPAPI_API_KEY`, `SENTRY_DSN`, `TIGER_DATABASE_URL`,
+   optionally `SERPAPI_API_KEY`, `SENTRY_DSN`,
    `CORS_ORIGINS` (only for the Flutter web build).
 4. Wait for the deploy, then open `https://<service>.onrender.com/health`.
 5. Point the clients at it:

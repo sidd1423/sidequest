@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../theme.dart';
 
-/// Compass-sun mark used on auth screens and empty states.
+/// Sun-and-trail mark used on empty states (the auth screens use CompassMark).
 class BrandMark extends StatelessWidget {
   const BrandMark({super.key, this.size = 72});
 
@@ -12,9 +12,13 @@ class BrandMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return CustomPaint(
-      size: Size.square(size),
-      painter: const _BrandPainter(),
+    // Centre + fixed box: inside a stretched Column a bare CustomPaint is as wide
+    // as the screen, and the painter (which scales with width) spills over the text.
+    return Center(
+      child: SizedBox.square(
+        dimension: size,
+        child: const CustomPaint(painter: _BrandPainter()),
+      ),
     );
   }
 }

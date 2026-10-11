@@ -172,10 +172,12 @@ class FakeLLM:
 
 
 LOOKUPS: list[tuple] = []
+INTERESTS: list[list[str]] = []
 
 
-def fake_lookup(location, max_travel_km, hint):
+def fake_lookup(location, max_travel_km, hint, interests=()):
     LOOKUPS.append((location.lat, location.lon, max_travel_km, hint))
+    INTERESTS.append(list(interests))
     c = ctx()
     if hint:
         c.place = hint
@@ -185,7 +187,7 @@ def fake_lookup(location, max_travel_km, hint):
 @pytest.fixture()
 def api(monkeypatch):
     monkeypatch.setenv("AUTH_REQUIRED", "true")
-    FakeLLM.prompts, LOOKUPS[:] = [], []
+    FakeLLM.prompts, LOOKUPS[:], INTERESTS[:] = [], [], []
     app.dependency_overrides[get_llm] = FakeLLM
     app.dependency_overrides[get_retriever] = lambda: None
     app.dependency_overrides[get_context_lookup] = lambda: fake_lookup
@@ -207,6 +209,7 @@ def test_quest_uses_device_location(api):
                  json={"max_travel_km": 2, "location": {"lat": HERE[0], "lon": HERE[1], "accuracy_m": 12}})
     assert r.status_code == 201, r.text
     assert LOOKUPS == [(HERE[0], HERE[1], 2.0, "")]
+    assert INTERESTS == [["nature"]]  # what to search Google Maps for
     assert "Riverdale Park (park, 350 m NE)" in FakeLLM.prompts[0]
     rec = r.json()
     assert rec["context"]["place"] == "Riverdale, Toronto" and rec["context"]["weather"]["temp_c"] == 12

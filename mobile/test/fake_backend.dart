@@ -28,7 +28,8 @@ class FakeBackend {
         'wind_kmh': 18.0, 'is_day': true, 'sunset': '18:52'},
     'nearby': [
       {'name': 'Riverdale Park', 'kind': 'park', 'distance_m': 350, 'direction': 'NE', 'lat': 43.6705, 'lon': -79.3555},
-      {'name': 'Don River', 'kind': 'river', 'distance_m': 600, 'direction': 'W', 'lat': 43.67, 'lon': -79.359},
+      {'name': 'Don River', 'kind': 'river', 'distance_m': 600, 'direction': 'W', 'lat': 43.67, 'lon': -79.359,
+          'rating': 4.6, 'open_state': 'Open 24 hours', 'source': 'google'},
     ],
   };
 

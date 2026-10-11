@@ -89,8 +89,12 @@ def _context_block(ctx: QuestContext, max_travel_km: float) -> str:
     if ctx.nearby:
         lines.append(f"- Real places within about {max_travel_km:g} km (straight-line distance, closest first):")
         for p in ctx.nearby:
-            where = f"{p.distance_m} m" + (f" {p.direction}" if p.direction else "")
-            lines.append(f"  - {p.name} ({p.kind}, {where})")
+            bits = [p.kind, f"{p.distance_m} m" + (f" {p.direction}" if p.direction else "")]
+            if p.rating:
+                bits.append(f"rated {p.rating:g}/5" + (f" by {p.reviews}" if p.reviews else ""))
+            if p.open_state:
+                bits.append(p.open_state)
+            lines.append(f"  - {p.name} ({', '.join(bits)})")
     return "\n".join(lines)
 
 
@@ -235,7 +239,7 @@ def build_prompt(
         parts += [
             "- Where it fits, build the quest around one or two of the REAL places listed above and name them "
             "exactly (with the direction to head). Only use places from that list - never invent place names, "
-            "streets or addresses.",
+            "streets or addresses. Skip any place whose hours say it's closed right now; prefer well-rated ones.",
         ]
     elif context is not None and context.place:
         parts += [f"- Fit it to {context.place}, but don't invent specific place names or addresses."]

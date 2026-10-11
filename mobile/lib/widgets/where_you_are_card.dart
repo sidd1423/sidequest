@@ -95,7 +95,7 @@ class _WhereYouAreCardState extends State<WhereYouAreCard> {
               Chip(
                 visualDensity: VisualDensity.compact,
                 avatar: const Icon(Icons.park_outlined, size: 16),
-                label: Text('${p.name} · ${p.distanceM} m'),
+                label: Text('${p.name} · ${p.distanceM} m${p.rating == null ? '' : ' · ★${p.rating}'}'),
               ),
           ],
         ),

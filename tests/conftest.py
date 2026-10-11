@@ -12,3 +12,4 @@ def isolated_storage(tmp_path, monkeypatch):
     monkeypatch.setenv("AUTH_REQUIRED", "false")
     monkeypatch.setenv("PASSWORD_HASH_ITERATIONS", "1000")  # fast hashing in tests
     monkeypatch.setenv("LOCAL_CONTEXT", "off")  # never call weather/map services from tests
+    monkeypatch.delenv("SERPAPI_API_KEY", raising=False)  # tests fake SerpApi themselves

@@ -174,7 +174,7 @@ def get_retriever() -> retrieval.Retriever | None:
     return None
 
 
-ContextLookup = Callable[[GeoPoint, float, str], QuestContext]
+ContextLookup = Callable[..., QuestContext]  # (location, max_travel_km, place_hint, interests)
 
 
 def get_context_lookup() -> ContextLookup:
@@ -182,8 +182,15 @@ def get_context_lookup() -> ContextLookup:
     return local_context.lookup
 
 
+def _interests(prefs: PreferencesIn | None) -> list[str]:
+    if prefs is None:
+        return []
+    return [i.value for i in prefs.interests] + list(prefs.custom_interests)
+
+
 def local_conditions(
-    settings: QuestSettings | None, max_travel_km: float, lookup: ContextLookup | None
+    settings: QuestSettings | None, max_travel_km: float, lookup: ContextLookup | None,
+    interests: list[str] | None = None,
 ) -> QuestContext | None:
     """Weather, place name and real spots nearby for this quest - from the device's
     location, or a place the user typed. None if we don't know where they are."""
@@ -198,7 +205,7 @@ def local_conditions(
     if location is None:
         return None
     try:
-        return lookup(location, max_travel_km, hint)
+        return lookup(location, max_travel_km, hint, interests or [])
     except Exception as exc:  # never block a quest on the weather
         log.warning("Local conditions lookup failed: %s", exc)
         return None
@@ -277,7 +284,7 @@ def generate_for(
     if not taste.is_empty:
         log.info("Feedback loop for %s: %d rated, likes %s, dislikes %s, time x%s",
                  user_id, taste.rated, taste.liked_tags, taste.disliked_tags, taste.time_ratio)
-    context = local_conditions(settings, prefs.environment.max_travel_km, lookup)
+    context = local_conditions(settings, prefs.environment.max_travel_km, lookup, _interests(prefs))
     if context is not None:
         w = context.weather
         log.info("Local conditions for %s: %s; %s; %d places nearby", user_id, context.place or "?",
@@ -372,7 +379,7 @@ def read_conditions(
     lookup: ContextLookup = Depends(get_context_lookup),
 ) -> QuestContext:
     """Weather + place + nearby spots at a position (the app shows it before you generate)."""
-    return lookup(GeoPoint(lat=lat, lon=lon), max_travel_km, "")
+    return lookup(GeoPoint(lat=lat, lon=lon), max_travel_km, "", _interests(db.get_preferences(user_id)))
 
 
 # ---------------------------------------------------------------------------

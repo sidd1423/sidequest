@@ -82,6 +82,18 @@ then looks up, in parallel and with short timeouts (all free, no API keys):
   Overpass API: parks, playgrounds, rivers, beaches, viewpoints, public art,
   trails, historic sites... with distance and compass direction.
 
+**Google Maps places via SerpApi (optional, recommended).** Put
+`SERPAPI_API_KEY=...` (from https://serpapi.com/manage-api-key) in `.env` and
+nearby places come from Google Maps instead (`backend/serp_places.py`): names,
+ratings, review counts, addresses and open/closed state, so quests can point at
+a specific well-liked spot. Each quest runs `SERPAPI_MAX_QUERIES` searches
+(default 2 = 2 credits): "park" plus one picked from your interests (art ->
+"public art", history -> "historical landmark", custom interests as typed...).
+Results are cached for `SERPAPI_CACHE_HOURS` (default 24) per search and ~100 m
+area, and OpenStreetMap still fills in spots Google doesn't list (unnamed
+viewpoints, paths). Typed places are geocoded with SerpApi too. If SerpApi fails
+(bad key, out of searches) it falls back to OpenStreetMap automatically.
+
 This goes into the prompt as a "Right now, where they are" section, plus
 condition-specific hard rules (thunderstorm, icy, very hot/cold, windy, dark,
 bad air, sunset soon), and Gemma is told to build the quest around real listed

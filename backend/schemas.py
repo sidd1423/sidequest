@@ -355,7 +355,7 @@ class WeatherNow(BaseModel):
 
 
 class NearbyPlace(BaseModel):
-    """A real outdoor spot near the user (OpenStreetMap)."""
+    """A real outdoor spot near the user (Google Maps via SerpApi, or OpenStreetMap)."""
 
     name: str
     kind: str  # park, playground, viewpoint, river, beach, artwork, ...
@@ -363,6 +363,11 @@ class NearbyPlace(BaseModel):
     direction: str = ""  # N, NE, E, ...
     lat: float | None = None
     lon: float | None = None
+    rating: float | None = None  # Google rating 1-5
+    reviews: int | None = None
+    open_state: str = ""  # "Open 24 hours", "Closes 9 PM", ...
+    address: str = ""
+    source: str = "osm"  # google | osm
 
 
 class QuestContext(BaseModel):

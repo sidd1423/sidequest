@@ -16,6 +16,11 @@ still generated with whatever we did get. Results are cached in memory
 Config (.env): LOCAL_CONTEXT=off disables all lookups; OPEN_METEO_URL,
 AIR_QUALITY_URL, NOMINATIM_URL, OVERPASS_URL override the endpoints;
 CONTEXT_TIMEOUT (seconds per request, default 6); NOMINATIM_EMAIL.
+
+Places: with SERPAPI_API_KEY set, nearby places come from Google Maps via
+SerpApi (backend/serp_places.py - ratings, open now, addresses), topped up
+with OpenStreetMap spots Google doesn't list (unnamed viewpoints, paths...).
+Typed places are geocoded with SerpApi too. Without a key: OpenStreetMap only.
 """
 
 from __future__ import annotations
@@ -26,10 +31,11 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 import requests
 
+from . import serp_places
 from .schemas import MAX_TRAVEL_KM, GeoPoint, NearbyPlace, QuestContext, WeatherNow
 
 log = logging.getLogger("sidequest.context")
@@ -221,6 +227,13 @@ def geocode(query: str) -> GeoPoint | None:
         return None
 
     def fetch() -> GeoPoint | None:
+        if serp_places.is_configured():
+            try:
+                found = serp_places.geocode(query, timeout=_timeout())
+                if found is not None:
+                    return found
+            except Exception as exc:
+                log.warning("SerpApi couldn't look up %r, trying OpenStreetMap: %s", query, exc)
         rows = _get((os.getenv("NOMINATIM_URL") or NOMINATIM_URL).rstrip("/") + "/search",
                     {"q": query, "format": "jsonv2", "limit": 1})
         if not rows:
@@ -336,9 +349,42 @@ def fetch_nearby(lat: float, lon: float, radius_m: int) -> list[NearbyPlace]:
 _pool = ThreadPoolExecutor(max_workers=6, thread_name_prefix="context")
 
 
-def lookup(location: GeoPoint, max_travel_km: float = 1.0, place_hint: str = "") -> QuestContext:
+def fetch_google_places(lat: float, lon: float, radius_m: int, interests: Sequence[str]) -> list[NearbyPlace]:
+    return serp_places.nearby(lat, lon, radius_m, interests, timeout=_timeout() + 4, cached=_cached,
+                              distance_m=distance_m, compass=compass)
+
+
+def merge_places(google: list[NearbyPlace], osm: list[NearbyPlace], limit: int = MAX_NEARBY) -> list[NearbyPlace]:
+    """Google places first (best-rated close ones), then OSM spots Google doesn't have."""
+    def key(name: str) -> str:
+        return "".join(ch for ch in name.lower() if ch.isalnum())
+
+    seen: dict[str, NearbyPlace] = {}
+    for p in google:
+        k = key(p.name)
+        if k not in seen or p.distance_m < seen[k].distance_m:
+            seen[k] = p
+    # Close and well-liked first: distance, nudged by rating x popularity.
+    def score(p: NearbyPlace) -> float:
+        bonus = (p.rating or 0) * min(1.0, math.log10((p.reviews or 0) + 1) / 3)
+        return p.distance_m - bonus * 100
+    ranked = sorted(seen.values(), key=score)
+    picked = ranked[: max(limit - 3, limit * 2 // 3)]  # leave a few slots for OSM-only spots
+    names = {key(p.name) for p in picked}
+    for p in osm + ranked:  # then OSM extras, then the rest of Google's
+        if len(picked) >= limit:
+            break
+        if key(p.name) not in names:
+            picked.append(p)
+            names.add(key(p.name))
+    return sorted(picked, key=lambda p: p.distance_m)
+
+
+def lookup(location: GeoPoint, max_travel_km: float = 1.0, place_hint: str = "",
+           interests: Sequence[str] = ()) -> QuestContext:
     """Weather + place name + nearby spots, fetched in parallel. Never raises:
-    parts that fail are left empty."""
+    parts that fail are left empty. `interests` pick what to search Google Maps
+    for (SerpApi only)."""
     lat, lon = location.lat, location.lon
     ctx = QuestContext(place=place_hint, lat=round(lat, 3), lon=round(lon, 3))
     if not enabled():
@@ -348,6 +394,10 @@ def lookup(location: GeoPoint, max_travel_km: float = 1.0, place_hint: str = "")
         "place": _pool.submit(fetch_place, lat, lon),
         "nearby": _pool.submit(fetch_nearby, lat, lon, search_radius(max_travel_km)),
     }
+    if serp_places.is_configured():
+        jobs["google"] = _pool.submit(fetch_google_places, lat, lon, search_radius(max_travel_km), list(interests))
+    google: list[NearbyPlace] | None = None
+    osm: list[NearbyPlace] = []
     deadline = time.monotonic() + _timeout() + 6
     for name, job in jobs.items():
         try:
@@ -360,7 +410,10 @@ def lookup(location: GeoPoint, max_travel_km: float = 1.0, place_hint: str = "")
         elif name == "place" and value and not place_hint:
             ctx.place = value
         elif name == "nearby":
-            ctx.nearby = value
+            osm = value
+        elif name == "google":
+            google = value
+    ctx.nearby = merge_places(google, osm) if google else osm
     return ctx
 
 

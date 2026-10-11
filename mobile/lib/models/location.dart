@@ -100,6 +100,8 @@ class NearbyPlace {
     this.direction = '',
     this.lat,
     this.lon,
+    this.rating,
+    this.openState = '',
   });
 
   final String name;
@@ -108,6 +110,8 @@ class NearbyPlace {
   final String direction;
   final double? lat;
   final double? lon;
+  final double? rating; // Google rating (SerpApi), null for OpenStreetMap places
+  final String openState; // "Open 24 hours", "Closes 9 PM"...
 
   /// "Riverdale Park · park · 350 m NE"
   String get label => '$name · $kind · ${distanceM >= 1000 ? '${(distanceM / 1000).toStringAsFixed(1)} km' : '$distanceM m'}'
@@ -120,10 +124,20 @@ class NearbyPlace {
         direction: (json['direction'] as String?) ?? '',
         lat: (json['lat'] as num?)?.toDouble(),
         lon: (json['lon'] as num?)?.toDouble(),
+        rating: (json['rating'] as num?)?.toDouble(),
+        openState: (json['open_state'] as String?) ?? '',
       );
 
-  Map<String, dynamic> toJson() =>
-      {'name': name, 'kind': kind, 'distance_m': distanceM, 'direction': direction, 'lat': lat, 'lon': lon};
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'kind': kind,
+        'distance_m': distanceM,
+        'direction': direction,
+        'lat': lat,
+        'lon': lon,
+        'rating': rating,
+        'open_state': openState,
+      };
 }
 
 /// Where/when a quest was generated (backend QuestContext): place, weather,

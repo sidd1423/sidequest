@@ -1219,6 +1219,7 @@ void main() {
       expect(textOf(tester, 'where_place'), 'Riverdale, Toronto');
       expect(textOf(tester, 'where_weather'), '12°C, light rain');
       expect(find.text('Riverdale Park · 350 m'), findsOneWidget);
+      expect(find.text('Don River · 600 m · ★4.6'), findsOneWidget); // Google rating (SerpApi)
       expect(find.byKey(const Key('place_field')), findsNothing);
 
       await tapAndSettle(tester, find.byKey(const Key('generate_button')));
